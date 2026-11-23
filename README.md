@@ -42,13 +42,17 @@ To copy your entire Liked Songs history on the first run, set `backfill = true` 
 
 ## Recently played
 
-`from = "recent"` reads your last 50 plays, which is all Spotify returns.
-- **With `keep = 100`**: the playlist always holds your last 100 *distinct* tracks, newest first. A song you replay moves back to the top instead of showing up twice.
+`from = "recent"` reads your last 50 plays, which is all Spotify returns. Pick a `mode`:
+- **`mode = "rolling"`** (with `keep = 100`, the default): the playlist always holds your last 100 *distinct* tracks, newest first.
+  A song you replay moves back to the top instead of showing up twice.
   The playlist can hold more than 50 because each run merges the newest plays into what's already there.
-- **Without `keep`**: an append-only archive. Every distinct track you play gets added once, oldest first, and is never removed.
+- **`mode = "archive"`**: a permanent listening history. Every distinct track you play gets added once, oldest first, and is never removed.
 
-Hourly runs catch everything unless you play more than 50 tracks in an hour.
-Spotify's history leaves out skipped songs and only counts tracks you actually listened to, and it sometimes misses offline plays.
+You can run both at once: add two `recent` jobs that point at different playlists.
+
+Hourly runs catch everything unless you play more than 50 tracks in an hour, so changes show up within an hour.
+In practice, Spotify only records a song in this history once it plays through to the end. Songs you skip partway are left out,
+even after 30+ seconds, and offline plays are sometimes missed.
 
 ## Playlist IDs vs names
 

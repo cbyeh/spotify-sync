@@ -244,11 +244,19 @@ def run_job(sp: Spotify, job: dict, dry_run: bool) -> int:
     dest_id = parse_playlist_id(job["to"])
     backfill = bool(job.get("backfill", False))
 
-    if source.lower() == "recent" and "keep" in job:
-        keep = int(job["keep"])
-        if not 1 <= keep <= 10000:
-            raise ValueError("`keep` must be between 1 and 10000")
-        return sync_recent_rolling(sp, name, dest_id, keep, dry_run)
+    if source.lower() == "recent":
+        # mode = "rolling" (last N distinct tracks, newest first) or "archive" (every track, kept forever).
+        # Older configs without `mode`: `keep` present means rolling, absent means archive.
+        mode = str(job.get("mode") or ("rolling" if "keep" in job else "archive")).lower()
+        if mode not in ("rolling", "archive"):
+            raise ValueError('`mode` must be "rolling" or "archive"')
+        if mode == "rolling":
+            keep = int(job.get("keep", 100))
+            if not 1 <= keep <= 10000:
+                raise ValueError("`keep` must be between 1 and 10000")
+            return sync_recent_rolling(sp, name, dest_id, keep, dry_run)
+        if "keep" in job:
+            raise ValueError('`keep` only applies to mode = "rolling"')
 
     existing = set(sp.playlist_uris(dest_id))
     if source.lower() == "liked":

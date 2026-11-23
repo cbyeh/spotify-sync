@@ -10,8 +10,8 @@
 #
 # Optional per job:
 #   backfill = true    (liked) copy your whole Liked Songs history, not just new likes
-#   keep = 100         (recent) rolling playlist of your last N distinct tracks, newest first.
-#                      Omit `keep` to build a permanent, append-only listening archive instead.
+#   mode = "rolling"   (recent) playlist of your last `keep` distinct tracks, newest first (default keep = 100)
+#   mode = "archive"   (recent) every distinct track you play, added once and kept forever
 #   enabled  = false   skip this job
 
 [[sync]]
@@ -20,13 +20,19 @@ from = "liked"
 to   = "1k6vxCv3Z389o9QK2qaxD7"   # Liked songs backUP
 backfill = false
 
-# Rolling playlist of your last 100 distinct tracks, newest first.
-# Remove `keep` to make it an append-only listening archive instead.
 [[sync]]
 name = "Recently played"
 from = "recent"
 to   = "5PDaSAK5sFZWzN6yPz5bXN"   # Recently Played
+mode = "rolling"
 keep = 100
+
+# Example: a permanent listening history. Make an empty playlist, paste its link, uncomment.
+# [[sync]]
+# name = "Listening archive"
+# from = "recent"
+# to   = "PASTE_ARCHIVE_PLAYLIST_LINK_HERE"
+# mode = "archive"
 
 # Discover Weekly -> "All Weeklies" (41JXOe9PZ9g6v2PUW687l6) can't be automated:
 # Spotify blocks personal apps from reading Discover Weekly. See README.
