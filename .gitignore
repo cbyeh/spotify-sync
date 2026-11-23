@@ -1,5 +1,10 @@
 __pycache__/
 aws/build/
 aws/function.zip
-*.json
 .env
+cdk.out/
+.venv/
+# local test output
+out.json
+dry.json
+link-out.json

@@ -41,7 +41,10 @@ def handler(event, context):
         print("Waiting for first Spotify approval; open the approval link from deploy.ps1. Skipping.")
         return {"ok": True, "skipped": "not approved yet"}
     dry_run = bool((event or {}).get("dry_run", False))
-    config = os.path.join(os.path.dirname(__file__), "config.toml")
+    here = os.path.dirname(os.path.abspath(__file__))
+    # deploy.ps1 packages config.toml next to this file; CDK keeps the repo layout (config one level up)
+    config = next(p for p in (os.path.join(here, "config.toml"), os.path.join(here, "..", "config.toml"))
+                  if os.path.exists(p))
     errors = spotify_sync.run_all(config, dry_run, on_new_refresh_token=_save_refresh_token)
     if errors:
         # Raising marks the invocation as failed, which triggers the error alarm.

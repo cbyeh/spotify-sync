@@ -1,0 +1,8 @@
+{
+  "app": "python app.py",
+  "context": {
+    "alertEmail": "",
+    "paramPrefix": "/spotify-sync",
+    "syncSchedule": "rate(1 hour)"
+  }
+}
