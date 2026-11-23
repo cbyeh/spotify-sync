@@ -12,6 +12,7 @@
 #   backfill = true    (liked) copy your whole Liked Songs history, not just new likes
 #   mode = "rolling"   (recent) playlist of your last `keep` distinct tracks, newest first (default keep = 100)
 #   mode = "archive"   (recent) every distinct track you play, added once and kept forever
+#   only_from = "<playlist link/ID>"   (recent) only plays whose source was that playlist, e.g. Discover Weekly
 #   enabled  = false   skip this job
 
 [[sync]]
@@ -34,5 +35,12 @@ from = "recent"
 to   = "6JqJYMSccCzSFTB0XMFGXZ"   # Recently played forever
 mode = "archive"
 
-# Discover Weekly -> "All Weeklies" (41JXOe9PZ9g6v2PUW687l6) can't be automated:
-# Spotify blocks personal apps from reading Discover Weekly. See README.
+# Every Discover Weekly song you listen to (to the end) goes into All Weeklies.
+# Spotify won't let personal apps read Discover Weekly itself, but your listening history
+# records which playlist each song was played from. Songs you don't play aren't captured.
+[[sync]]
+name = "Discover Weekly -> All Weeklies"
+from = "recent"
+only_from = "37i9dQZEVXcFznARRTnOdi"   # your Discover Weekly (Share > Copy link to playlist)
+to   = "41JXOe9PZ9g6v2PUW687l6"        # All Weeklies
+mode = "archive"

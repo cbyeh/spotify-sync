@@ -8,7 +8,8 @@ It copies new tracks from a source into a destination playlist: every minute on 
 | Liked Songs → backup playlist | ✅ |
 | Recently played → rolling "last N tracks" playlist, or a permanent listening archive | ✅ |
 | A playlist you own or collaborate on → another playlist | ✅ |
-| Discover Weekly, Release Radar, Daily Mix, other Spotify-made playlists | ❌ Spotify blocks these for personal apps (see below) |
+| Discover Weekly / Release Radar → archive, **songs you play from them** | ✅ via `only_from` (see below) |
+| The *full* Discover Weekly list, including songs you haven't played | ❌ Spotify blocks this for personal apps |
 
 There are two ways to run it, and both are free: **GitHub Actions** (set up below) or **AWS Lambda**, deployed with CDK ([aws/README.md](aws/README.md)).
 The AWS version also emails you a one-tap renewal link before Spotify's 6-month token expiry.
@@ -54,19 +55,37 @@ On AWS, changes show up within about a minute; on GitHub Actions, within an hour
 In practice, Spotify only records a song in this history once it plays through to the end. Songs you skip partway are left out,
 even after 30+ seconds, and offline plays are sometimes missed.
 
+### Archiving Discover Weekly (the songs you play)
+
+Personal apps can't read Discover Weekly, but your listening history records which playlist each song was played from.
+`only_from` keeps only those plays:
+
+```toml
+[[sync]]
+name = "Discover Weekly -> All Weeklies"
+from = "recent"
+only_from = "https://open.spotify.com/playlist/37i9dQZEVXc..."   # your Discover Weekly: Share > Copy link
+to   = "https://open.spotify.com/playlist/..."                 # your archive playlist
+mode = "archive"
+```
+
+Every Discover Weekly song you play to the end lands in your archive within about a minute.
+The same works for Release Radar, Daily Mixes or any other playlist you listen from.
+
 ## Playlist IDs vs names
 
 Use the ID. Every playlist has a fixed 22-character ID (the part after `/playlist/` in its share link). Names aren't unique and can change, but the ID stays the same.
 `config.toml` takes a share link, a `spotify:playlist:` URI or a bare ID.
 
-## Why Discover Weekly doesn't work
+## Why the full Discover Weekly list can't be copied
 
 Since 27 Nov 2024, apps without Spotify's "extended quota" status can't read Spotify-generated playlists. Spotify no longer grants that status to individuals.
 In February 2026, reading a playlist's tracks was also limited to playlists you own or collaborate on.
 IFTTT still has that access because it is a large commercial partner.
 
 Workarounds:
-- **Manual (10 seconds a week):** open Discover Weekly, select all tracks (Ctrl/Cmd+A on desktop), and choose *Add to playlist* → your archive.
+- **`only_from` (automatic):** archives every Discover Weekly song you actually play (see above).
+- **Manual, for the songs you don't play (10 seconds a week):** open Discover Weekly, select all tracks (Ctrl/Cmd+A on desktop), and choose *Add to playlist* → your archive.
   If you prefer, *Add to Liked Songs* also works, and the liked-songs job then backs them up automatically.
 - **Unofficial web-player tokens:** some tools use your browser's `sp_dc` cookie to impersonate the web player.
   This breaks Spotify's developer terms and stops working without warning, so it isn't included here.
