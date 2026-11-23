@@ -28,4 +28,9 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
-        run: python spotify_sync.py run ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          if [ -z "$SPOTIFY_REFRESH_TOKEN" ]; then
+            echo "::notice::Spotify secrets not set; skipping. (Set them to use GitHub Actions, or ignore this if you deploy to AWS.)"
+            exit 0
+          fi
+          python spotify_sync.py run ${{ inputs.dry_run && '--dry-run' || '' }}
