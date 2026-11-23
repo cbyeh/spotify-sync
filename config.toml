@@ -27,12 +27,12 @@ to   = "5PDaSAK5sFZWzN6yPz5bXN"   # Recently Played
 mode = "rolling"
 keep = 100
 
-# Example: a permanent listening history. Make an empty playlist, paste its link, uncomment.
-# [[sync]]
-# name = "Listening archive"
-# from = "recent"
-# to   = "PASTE_ARCHIVE_PLAYLIST_LINK_HERE"
-# mode = "archive"
+# Permanent listening history: every song you finish, added once, kept forever.
+[[sync]]
+name = "Recently played forever"
+from = "recent"
+to   = "6JqJYMSccCzSFTB0XMFGXZ"   # Recently played forever
+mode = "archive"
 
 # Discover Weekly -> "All Weeklies" (41JXOe9PZ9g6v2PUW687l6) can't be automated:
 # Spotify blocks personal apps from reading Discover Weekly. See README.
