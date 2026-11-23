@@ -11,7 +11,7 @@ It runs hourly on GitHub Actions and copies new tracks from a source into a dest
 | Discover Weekly, Release Radar, Daily Mix, other Spotify-made playlists | ❌ Spotify blocks these for personal apps (see below) |
 
 There are two ways to run it, and both are free: **GitHub Actions** (set up below) or **AWS Lambda**, deployed with CDK ([aws/README.md](aws/README.md)).
-The AWS version also emails you a one-tap renewal link before Spotify's 6-month token expiry, and needs no Python on your computer.
+The AWS version also emails you a one-tap renewal link before Spotify's 6-month token expiry.
 Pick one. If you run both, nothing gets duplicated; it's just redundant.
 
 It's stateless: before adding, it reads the destination playlist and skips anything already there.
