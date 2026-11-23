@@ -53,14 +53,15 @@ class SpotifySyncStack(Stack):
         params_arn = self.format_arn(service="ssm", resource="parameter",
                                      resource_name=prefix.lstrip("/") + "/*")
 
-        def make_function(cid: str, name: str, handler: str, env: dict) -> lambda_.Function:
+        def make_function(cid: str, name: str, handler: str, env: dict,
+                          timeout: Duration = Duration.minutes(2)) -> lambda_.Function:
             log_group = logs.LogGroup(
                 self, f"{cid}Logs", log_group_name=f"/aws/lambda/{name}",
                 retention=logs.RetentionDays.TWO_WEEKS, removal_policy=RemovalPolicy.DESTROY)
             fn = lambda_.Function(
                 self, cid, function_name=name,
                 runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
-                handler=handler, code=code, memory_size=128, timeout=Duration.minutes(2),
+                handler=handler, code=code, memory_size=128, timeout=timeout,
                 environment=env, log_group=log_group)
             fn.add_to_role_policy(iam.PolicyStatement(
                 actions=["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath",
@@ -68,8 +69,9 @@ class SpotifySyncStack(Stack):
                 resources=[params_arn]))
             return fn
 
+        # 5 minutes: a cold start may have to page through a large archive (~7k tracks ≈ 50 s)
         sync_fn = make_function("SyncFunction", "spotify-sync", "aws.lambda_function.handler",
-                                {"PARAM_PREFIX": prefix})
+                                {"PARAM_PREFIX": prefix}, timeout=Duration.minutes(5))
         auth_fn = make_function("AuthFunction", "spotify-sync-auth", "aws.auth_function.handler",
                                 {"PARAM_PREFIX": prefix, "TOPIC_ARN": topic.topic_arn})
         topic.grant_publish(auth_fn)
