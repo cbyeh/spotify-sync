@@ -68,6 +68,9 @@ Workarounds:
 
 ## Notes
 
+- **Re-authorize every 6 months.** Spotify refresh tokens expire 6 months after you approve the app, and using them doesn't extend that.
+  When the token expires, runs fail with a message telling you to re-run `auth`. Run it, then update `SPOTIFY_REFRESH_TOKEN` (GitHub secret or the SSM parameter).
+
 - **Unliking a song** doesn't remove it from the backup. That matches the IFTTT applet.
 - **Deleting a track from the destination** means it gets added again if it's still in the source
   (for Liked Songs, only if it's among your recent likes).

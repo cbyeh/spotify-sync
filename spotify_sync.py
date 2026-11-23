@@ -101,7 +101,13 @@ def token_request(form: dict, client_id: str, client_secret: str) -> dict:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.load(resp)
     except urllib.error.HTTPError as e:
-        raise SpotifyError(f"Token request failed ({e.code}): {e.read().decode(errors='replace')}") from None
+        body = e.read().decode(errors="replace")
+        if "invalid_grant" in body and form.get("grant_type") == "refresh_token":
+            raise SpotifyError(
+                "Spotify refresh token expired or was revoked. Tokens last 6 months from when you "
+                "approved the app, and refreshing doesn't extend that. Re-run `python spotify_sync.py auth` "
+                "and update the stored token (GitHub secret or SSM parameter).") from None
+        raise SpotifyError(f"Token request failed ({e.code}): {body}") from None
 
 
 def track_uri(entry: dict) -> str | None:
