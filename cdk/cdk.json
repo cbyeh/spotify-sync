@@ -3,6 +3,6 @@
   "context": {
     "alertEmail": "",
     "paramPrefix": "/spotify-sync",
-    "syncSchedule": "rate(1 hour)"
+    "syncSchedule": "rate(1 minute)"
   }
 }

@@ -122,8 +122,18 @@ def track_uri(entry: dict) -> str | None:
 # --------------------------------------------------------------------------- API client
 
 class Spotify:
-    def __init__(self, access_token: str):
+    def __init__(self, access_token: str, expires_in: int = 3600):
         self.token = access_token
+        self.expires_at = time.time() + expires_in - 120   # refresh a bit early
+        self._recent: list[dict] | None = None
+
+    @property
+    def expired(self) -> bool:
+        return time.time() >= self.expires_at
+
+    def new_run(self) -> None:
+        """Forget per-run caches (the session itself can be reused while the token is valid)."""
+        self._recent = None
 
     @classmethod
     def from_env(cls, on_new_refresh_token=None) -> "Spotify":
@@ -140,7 +150,7 @@ class Spotify:
             else:
                 print("::warning::Spotify issued a new refresh token. The old one usually keeps working, "
                       "but if runs start failing with invalid_grant, re-run `auth` and update the secret.")
-        return cls(data["access_token"])
+        return cls(data["access_token"], int(data.get("expires_in", 3600)))
 
     def request(self, method: str, path: str, body: dict | None = None) -> dict:
         url = path if path.startswith("http") else API + path
@@ -181,10 +191,15 @@ class Spotify:
         for page in self.pages("/me/playlists?limit=50"):
             yield from page
 
+    def recently_played_items(self) -> list[dict]:
+        """Up to 50 most recent plays, newest first (fetched once per run).
+        Spotify only records tracks that play through to the end."""
+        if self._recent is None:
+            self._recent = self.request("GET", "/me/player/recently-played?limit=50").get("items", [])
+        return self._recent
+
     def recently_played(self) -> list[str]:
-        """Up to 50 most recent plays, newest first. Spotify omits skips and some offline plays."""
-        data = self.request("GET", "/me/player/recently-played?limit=50")
-        return [u for u in map(track_uri, data.get("items", [])) if u]
+        return [u for u in map(track_uri, self.recently_played_items()) if u]
 
     # -- writes
     def add_to_playlist(self, playlist_id: str, uris: list[str]) -> None:
@@ -238,7 +253,42 @@ def sync_recent_rolling(sp: Spotify, name: str, dest_id: str, keep: int, dry_run
     return moved
 
 
-def run_job(sp: Spotify, job: dict, dry_run: bool) -> int:
+def change_marker(sp: Spotify, source: str) -> str | None:
+    """A cheap value that changes whenever the source has something new:
+    newest like time, newest play time, or the source playlist's snapshot id."""
+    src = source.lower()
+    if src == "liked":
+        items = sp.request("GET", "/me/tracks?limit=1").get("items", [])
+        return items[0].get("added_at") if items else None
+    if src == "recent":
+        items = sp.recently_played_items()
+        return items[0].get("played_at") if items else None
+    data = sp.request("GET", f"/playlists/{parse_playlist_id(source)}?fields=snapshot_id")
+    return data.get("snapshot_id")
+
+
+def state_key(job: dict) -> str:
+    source = str(job["from"]).strip()
+    src = source.lower() if source.lower() in ("liked", "recent") else parse_playlist_id(source)
+    return f"{src}-{parse_playlist_id(job['to'])}"
+
+
+def run_job(sp: Spotify, job: dict, dry_run: bool, state=None, full: bool = False) -> int:
+    """Run one job. With a `state` store (get/set), skip quickly when the source hasn't changed
+    since the last successful run, unless `full` is set."""
+    if state is None:
+        return sync_job(sp, job, dry_run)
+    key = state_key(job)
+    marker = change_marker(sp, str(job["from"]).strip())
+    if not full and marker and state.get(key) == marker:
+        return 0
+    added = sync_job(sp, job, dry_run)
+    if marker and not dry_run:
+        state.set(key, marker)
+    return added
+
+
+def sync_job(sp: Spotify, job: dict, dry_run: bool) -> int:
     name = job.get("name", "(unnamed)")
     source = str(job["from"]).strip()
     dest_id = parse_playlist_id(job["to"])
@@ -293,14 +343,18 @@ def load_config(path: str) -> list[dict]:
 
 # --------------------------------------------------------------------------- commands
 
-def run_all(config_path: str, dry_run: bool = False, on_new_refresh_token=None) -> list[str]:
-    """Run every job; returns a list of error messages (empty means all succeeded)."""
+def run_all(config_path: str, dry_run: bool = False, on_new_refresh_token=None,
+            state=None, full: bool = False, sp: Spotify | None = None) -> list[str]:
+    """Run every job; returns a list of error messages (empty means all succeeded).
+    Pass a `state` store to enable quick "anything new?" checks, and `sp` to reuse a session."""
     jobs = load_config(config_path)
-    sp = Spotify.from_env(on_new_refresh_token)
+    if sp is None or sp.expired:
+        sp = Spotify.from_env(on_new_refresh_token)
+    sp.new_run()
     errors = []
     for job in jobs:
         try:
-            run_job(sp, job, dry_run)
+            run_job(sp, job, dry_run, state, full)
         except (SpotifyError, ValueError) as e:
             msg = f"[{job.get('name', '(unnamed)')}] {e}"
             errors.append(msg)

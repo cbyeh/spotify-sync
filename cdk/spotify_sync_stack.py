@@ -36,7 +36,8 @@ class SpotifySyncStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, *,
                  param_prefix: str = "/spotify-sync",
                  alert_email: str | None = None,
-                 sync_schedule: str = "rate(1 hour)",
+                 sync_schedule: str = "rate(1 minute)",
+                 full_check_schedule: str = "cron(30 11 * * ? *)",
                  reminder_schedule: str = "cron(0 17 * * ? *)",
                  **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -62,7 +63,8 @@ class SpotifySyncStack(Stack):
                 handler=handler, code=code, memory_size=128, timeout=Duration.minutes(2),
                 environment=env, log_group=log_group)
             fn.add_to_role_policy(iam.PolicyStatement(
-                actions=["ssm:GetParameter", "ssm:GetParameters", "ssm:PutParameter"],
+                actions=["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath",
+                         "ssm:PutParameter", "ssm:DeleteParameter"],
                 resources=[params_arn]))
             return fn
 
@@ -91,6 +93,8 @@ class SpotifySyncStack(Stack):
         auth_fn.grant_invoke(scheduler_role)
         for cid, name, expr, fn, payload in [
             ("SyncSchedule", "spotify-sync", sync_schedule, sync_fn, "{}"),
+            # once a day, ignore the "anything new?" shortcut and re-check every playlist
+            ("FullCheckSchedule", "spotify-sync-full", full_check_schedule, sync_fn, '{"full":true}'),
             ("ReminderSchedule", "spotify-sync-reminder", reminder_schedule, auth_fn, '{"action":"remind"}'),
         ]:
             scheduler.CfnSchedule(
@@ -100,12 +104,13 @@ class SpotifySyncStack(Stack):
                     arn=fn.function_arn, role_arn=scheduler_role.role_arn, input=payload,
                     retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=0)))
 
-        # --- email if the sync fails 3 hours in a row
+        # --- email if the sync keeps failing (10+ failed runs an hour, 3 hours in a row);
+        #     the odd transient Spotify error at one run per minute won't trigger it
         if alert_email:
             alarm = cw.Alarm(
                 self, "SyncFailing", alarm_name="spotify-sync-failing",
                 metric=sync_fn.metric_errors(period=Duration.hours(1), statistic="Sum"),
-                threshold=1, evaluation_periods=3,
+                threshold=10, evaluation_periods=3,
                 comparison_operator=cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
                 treat_missing_data=cw.TreatMissingData.NOT_BREACHING)
             alarm.add_alarm_action(cw_actions.SnsAction(topic))

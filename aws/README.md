@@ -2,7 +2,8 @@
 
 The whole AWS setup is one CDK stack (`cdk/`). It contains:
 
-- **`spotify-sync`**: a Lambda that runs the sync every hour, triggered by EventBridge Scheduler.
+- **`spotify-sync`**: a Lambda that syncs **every minute**, triggered by EventBridge Scheduler. Each run first asks Spotify "anything new?"
+  (1–2 small calls, about a second) and only reads or writes playlists when something changed. A daily full check re-verifies everything.
 - **`spotify-sync-auth`**: a Lambda with a public URL that handles Spotify approval, plus a daily check that emails you a one-tap renewal link before Spotify's 6-month token expiry.
 - An SNS email topic, a failure alarm, two IAM roles with minimal permissions, and logs kept for 14 days.
 
@@ -10,9 +11,10 @@ Your secrets live in SSM Parameter Store, **outside** the stack. Deleting or red
 
 | Piece | Usage per month | Free allowance | Cost |
 |---|---|---|---|
-| Lambda (2 functions, 128 MB, arm64) | ~750 runs | 1M requests, 400k GB-s | $0 |
-| EventBridge Scheduler | ~750 invocations | 14M invocations | $0 |
-| SSM Parameter Store (standard) | ~8 parameters | standard tier is free | $0 |
+| Lambda (2 functions, 128 MB, arm64) | ~44k runs, ~6k GB-s | 1M requests, 400k GB-s | $0 |
+| EventBridge Scheduler | ~44k invocations | 14M invocations | $0 |
+| SSM Parameter Store (standard) | ~12 parameters, ~130k API calls | standard tier is free | $0 |
+| CloudWatch Logs (14-day retention) | ~15 MB | 5 GB | $0 |
 | SNS email + 1 CloudWatch alarm | a few emails | 1k emails, 10 alarms | $0 |
 | CDK bootstrap bucket (S3) | a few KB of code packages | – | ~$0 |
 
@@ -59,7 +61,7 @@ aws lambda invoke --function-name spotify-sync-auth --cli-binary-format raw-in-b
 Get-Content link-out.json
 ```
 
-Open the `approval_link` and tap **Agree**. The hourly sync starts on its next run. Until you approve, it quietly skips.
+Open the `approval_link` and tap **Agree**. Syncing starts within a minute. Until you approve, it quietly skips.
 
 ## Renewal: one tap about every 5 months
 

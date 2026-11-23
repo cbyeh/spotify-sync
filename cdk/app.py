@@ -12,7 +12,7 @@ SpotifySyncStack(
     app, "SpotifySync",
     alert_email=ctx("alertEmail") or None,
     param_prefix=ctx("paramPrefix") or "/spotify-sync",
-    sync_schedule=ctx("syncSchedule") or "rate(1 hour)",
+    sync_schedule=ctx("syncSchedule") or "rate(1 minute)",
     env=cdk.Environment(
         account=os.getenv("CDK_DEFAULT_ACCOUNT"),
         region=os.getenv("CDK_DEFAULT_REGION") or "us-west-2",
