@@ -169,7 +169,10 @@ class Spotify:
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     raw = resp.read()
-                    return json.loads(raw) if raw else {}
+                try:
+                    return json.loads(raw) if raw.strip() else {}
+                except ValueError:
+                    return {}   # some player commands answer with a non-JSON body
             except urllib.error.HTTPError as e:
                 if e.code == 429 or e.code >= 500:
                     wait = int(e.headers.get("Retry-After", 2 ** attempt))
@@ -294,6 +297,7 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
         raise PlaybackUnavailable(f"no idle Spotify app open on {wanted}")
     did = device["id"]
     q = f"device_id={did}"
+    print(f"playback: using {device.get('name')} ({device.get('type')})")
 
     # Activate the device without playing, then record its state so we can restore it exactly.
     sp.request("PUT", "/me/player", {"device_ids": [did], "play": False})
@@ -366,6 +370,7 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
                 break
             tracks.append(_track_obj_uri(nxt.get("item")))
         result = [u for u in tracks if u]
+        print(f"playback: read {len(result)} tracks")
     finally:
         _restore(sp, did, prev, can_mute)
     return list(dict.fromkeys(result))
@@ -379,8 +384,11 @@ def _restore(sp: "Spotify", did: str, prev: dict, can_mute: bool) -> None:
         try:
             sp.request(method, path, body)
         except SpotifyError as e:
+            if "/pause" in path and "Restriction violated" in str(e):
+                return   # already paused
             print(f"::warning::restore step failed: {method} {path}: {e}")
 
+    print("playback: restoring player")
     attempt("PUT", f"/me/player/pause?{q}")
     if prev["item"]:
         body = ({"context_uri": prev["context"], "offset": {"uri": prev["item"]}} if prev["context"]

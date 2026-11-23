@@ -120,8 +120,17 @@ def handler(event, context):
         print("Previous run still in progress; skipping.")
         return {"ok": True, "skipped": "locked"}
     try:
-        errors = spotify_sync.run_all(_config_path(), dry_run, state=SsmState(), full=full, sp=_session,
-                                      playback=playback, final=final, notify=_notify)
+        def run():
+            return spotify_sync.run_all(_config_path(), dry_run, state=SsmState(), full=full, sp=_session,
+                                        playback=playback, final=final, notify=_notify)
+        errors = run()
+        if any("-> 401" in e for e in errors):
+            # The cached access token predates a re-approval (e.g. new permissions): get a fresh one.
+            print("Access token rejected; refreshing and retrying once.")
+            if not _load_secrets():
+                return {"ok": True, "skipped": "not approved"}
+            _session = spotify_sync.Spotify.from_env(on_new_refresh_token=_save_refresh_token)
+            errors = run()
     finally:
         _release_lock()
     if errors:
