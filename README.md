@@ -11,6 +11,7 @@ It runs hourly on GitHub Actions and copies new tracks from a source into a dest
 | Discover Weekly, Release Radar, Daily Mix, other Spotify-made playlists | ❌ Spotify blocks these for personal apps (see below) |
 
 There are two ways to run it, and both are free: **GitHub Actions** (set up below) or **AWS Lambda** ([aws/README.md](aws/README.md)).
+The AWS version also emails you a one-tap renewal link before Spotify's 6-month token expiry, and needs no Python on your computer.
 Pick one. If you run both, nothing gets duplicated; it's just redundant.
 
 It's stateless: before adding, it reads the destination playlist and skips anything already there.
@@ -69,7 +70,8 @@ Workarounds:
 ## Notes
 
 - **Re-authorize every 6 months.** Spotify refresh tokens expire 6 months after you approve the app, and using them doesn't extend that.
-  When the token expires, runs fail with a message telling you to re-run `auth`. Run it, then update `SPOTIFY_REFRESH_TOKEN` (GitHub secret or the SSM parameter).
+  On AWS, you get an email with a one-tap renewal link about a month before expiry.
+  On GitHub Actions, runs fail with a message telling you to re-run `auth`. Run it, then update the `SPOTIFY_REFRESH_TOKEN` secret.
 
 - **Unliking a song** doesn't remove it from the backup. That matches the IFTTT applet.
 - **Deleting a track from the destination** means it gets added again if it's still in the source
