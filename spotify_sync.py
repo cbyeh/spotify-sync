@@ -277,14 +277,17 @@ SLEEP = time.sleep   # replaced in tests
 
 
 def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = None,
-                     device_types: tuple = ("Computer",), max_tracks: int = 200) -> list[str]:
+                     device_types: tuple = ("Computer",), max_tracks: int = 60,
+                     trace: bool = False) -> list[str]:
     """Read a playlist the API won't let us read (e.g. Discover Weekly) by briefly playing it,
     muted, on an idle Spotify app, then putting everything back the way it was.
 
     Plays at most a handful of positions (each for ~1 second, well under the 30 s a stream needs):
     the first track plus the queue gives ~21 tracks; jumping to later positions verifies each
     candidate really belongs to the playlist, which also finds where the playlist ends and
-    autoplay begins. Raises PlaybackUnavailable if something is playing or no device fits."""
+    autoplay begins. Raises PlaybackUnavailable if something is playing, no device fits, the
+    player state can't be read (nothing is changed then), or it reads more than `max_tracks`
+    (a safety net: nothing is added). `trace=True` logs every position it plays."""
     ctx = f"spotify:playlist:{playlist_id}"
     before = sp.request("GET", "/me/player") or {}
     if before.get("is_playing"):
@@ -299,16 +302,43 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
     q = f"device_id={did}"
     print(f"playback: using {device.get('name')} ({device.get('type')})")
 
-    # Activate the device without playing, then record its state so we can restore it exactly.
-    sp.request("PUT", "/me/player", {"device_ids": [did], "play": False})
-    state = sp.request("GET", "/me/player") or {}
+    def log(msg: str) -> None:
+        if trace:
+            print(f"trace: {msg}")
+
+    def describe(c: dict) -> str:
+        item = c.get("item") or {}
+        ctx_uri = (c.get("context") or {}).get("uri") or "-"
+        where = "this playlist" if ctx_uri == ctx else ctx_uri
+        return f"{'playing' if c.get('is_playing') else 'paused'} '{item.get('name', '-')}' from {where}"
+
+    # Record the state to restore. If a session is active, that's what you'd come back to;
+    # otherwise activate the idle device (without playing) and wait until it reports its state.
+    if before.get("device"):
+        state = before
+        sp.request("PUT", "/me/player", {"device_ids": [did], "play": False})
+    else:
+        sp.request("PUT", "/me/player", {"device_ids": [did], "play": False})
+        state = {}
+        end = time.time() + 10
+        while time.time() < end:
+            state = sp.request("GET", "/me/player") or {}
+            if (state.get("device") or {}).get("id") == did:
+                break
+            SLEEP(0.5)
+        if (state.get("device") or {}).get("id") != did:
+            raise PlaybackUnavailable("couldn't read the player's settings, so nothing was changed")
     if state.get("is_playing"):
         raise PlaybackUnavailable("something started playing")
+    log(f"before: {describe(state)}, shuffle={state.get('shuffle_state')}, repeat={state.get('repeat_state')}, "
+        f"volume={(state.get('device') or {}).get('volume_percent')}")
     prev = {
         "device": (before.get("device") or {}).get("id"),
         "shuffle": state.get("shuffle_state"),
         "repeat": state.get("repeat_state"),
-        "volume": (state.get("device") or {}).get("volume_percent", device.get("volume_percent")),
+        # the device we mute is `did`: save its own volume (not the previously active device's)
+        "volume": ((state.get("device") or {}).get("volume_percent")
+                   if (state.get("device") or {}).get("id") == did else device.get("volume_percent")),
         "context": (state.get("context") or {}).get("uri"),
         "item": _track_obj_uri(state.get("item")),
         "progress": state.get("progress_ms") or 0,
@@ -324,10 +354,14 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
     def check(pos: int, expected: str) -> bool:
         try:
             play_at(pos)
-        except SpotifyError:
+        except SpotifyError as e:
+            log(f"check {pos}: play refused ({str(e)[-80:]})")
             return False
-        return _wait_until(sp, lambda c: playing(c) and _track_obj_uri(c.get("item")) == expected,
-                           timeout=6) is not None
+        ok = _wait_until(sp, lambda c: playing(c) and _track_obj_uri(c.get("item")) == expected, timeout=6)
+        if trace:
+            now = sp.request("GET", "/me/player/currently-playing") or {}
+            log(f"check {pos}: {'OK ' if ok else 'NO '} now {describe(now)}")
+        return ok is not None
 
     try:
         if can_mute:
@@ -339,12 +373,15 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
         cur = _wait_until(sp, playing)
         if not cur:
             raise PlaybackUnavailable("Spotify didn't start the playlist")
+        log(f"pos 0: {describe(cur)}")
         tracks = [_track_obj_uri(cur.get("item"))]   # confirmed members, in playlist order
         one_by_one = False
         while len(tracks) < max_tracks:
             if not one_by_one:
                 # The queue shows what comes next: the rest of the playlist, then possibly autoplay.
                 queue = sp.request("GET", "/me/player/queue").get("queue", [])
+                log(f"queue after {len(tracks)}: {len(queue)} items: " +
+                    ", ".join(q.get("name", "?")[:20] for q in queue[:20]))
                 candidates = tracks + [u for u in map(_track_obj_uri, queue) if u]
                 lo, hi = len(tracks) - 1, len(candidates) - 1
                 if hi > lo and check(hi, candidates[hi]):
@@ -362,15 +399,22 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
             # Start at the next position: either finds one more track or confirms the end.
             try:
                 play_at(len(tracks))
-            except SpotifyError:
+            except SpotifyError as e:
+                log(f"probe {len(tracks)}: play refused ({str(e)[-80:]}) -> end")
                 break
             nxt = _wait_until(sp, lambda c: playing(c) and _track_obj_uri(c.get("item")) not in tracks,
                               timeout=6)
             if not nxt:
+                now = sp.request("GET", "/me/player/currently-playing") or {}
+                log(f"probe {len(tracks)}: nothing new, now {describe(now)} -> end")
                 break
+            log(f"probe {len(tracks)}: {describe(nxt)}")
             tracks.append(_track_obj_uri(nxt.get("item")))
         result = [u for u in tracks if u]
         print(f"playback: read {len(result)} tracks")
+        if len(result) >= max_tracks:
+            raise PlaybackUnavailable(f"read {len(result)}+ tracks, more than the {max_tracks} expected; "
+                                      "not trusting this read, nothing added")
     finally:
         _restore(sp, did, prev, can_mute)
     return list(dict.fromkeys(result))
@@ -405,6 +449,13 @@ def _restore(sp: "Spotify", did: str, prev: dict, can_mute: bool) -> None:
         attempt("PUT", f"/me/player/volume?volume_percent={prev['volume']}&{q}")
     if prev["device"] and prev["device"] != did:
         attempt("PUT", "/me/player", {"device_ids": [prev["device"]], "play": False})
+    try:
+        after = sp.request("GET", "/me/player") or {}
+        print(f"playback: after restore: shuffle={after.get('shuffle_state')}, repeat={after.get('repeat_state')}, "
+              f"volume={(after.get('device') or {}).get('volume_percent')}, "
+              f"item='{(after.get('item') or {}).get('name')}', playing={after.get('is_playing')}")
+    except SpotifyError:
+        pass
 
 
 # --------------------------------------------------------------------------- sync logic
@@ -503,7 +554,8 @@ def run_playback_job(sp: Spotify, job: dict, dry_run: bool, state=None,
         print(f"[{name}] already done this week.")
         return 0
     try:
-        uris = read_by_playback(sp, src_id, device_name=job.get("device"))
+        uris = read_by_playback(sp, src_id, device_name=job.get("device"),
+                                max_tracks=int(job.get("max_tracks", 60)), trace=bool(job.get("trace") or dry_run))
         if not uris:
             raise PlaybackUnavailable("couldn't read any tracks")
     except PlaybackUnavailable as e:
