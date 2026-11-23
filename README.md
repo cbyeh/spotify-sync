@@ -9,7 +9,7 @@ It copies new tracks from a source into a destination playlist: every minute on 
 | Recently played → rolling "last N tracks" playlist, or a permanent listening archive | ✅ |
 | A playlist you own or collaborate on → another playlist | ✅ |
 | Discover Weekly / Release Radar → archive, **songs you play from them** | ✅ via `only_from` (see below) |
-| The *full* Discover Weekly list, including songs you haven't played | ❌ Spotify blocks this for personal apps |
+| The *full* Discover Weekly list, including songs you haven't played | ✅ opt-in, `via = "playback"` (see below) |
 
 There are two ways to run it, and both are free: **GitHub Actions** (set up below) or **AWS Lambda**, deployed with CDK ([aws/README.md](aws/README.md)).
 The AWS version also emails you a one-tap renewal link before Spotify's 6-month token expiry.
@@ -71,6 +71,39 @@ mode = "archive"
 
 Every Discover Weekly song you play to the end lands in your archive within about a minute.
 The same works for Release Radar, Daily Mixes or any other playlist you listen from.
+
+### The full Discover Weekly list (`via = "playback"`, opt-in, AWS)
+
+Spotify won't let personal apps *read* Discover Weekly, but it does let them *play* it. A `via = "playback"` job reads the
+playlist by briefly playing it, then puts everything back:
+
+```toml
+[[sync]]
+name = "Discover Weekly full list -> All Weeklies"
+from = "https://open.spotify.com/playlist/37i9dQZEVXc..."   # your Discover Weekly
+to   = "https://open.spotify.com/playlist/..."              # your archive
+via  = "playback"
+# device = "My PC"   # optional: a specific Spotify device (default: any computer)
+```
+
+What happens every Monday from 4 AM (your time zone, `timezone` in `cdk/cdk.json`):
+
+1. It skips the attempt if anything is playing, or if no Spotify **desktop** app is open and idle. Phones are never used,
+   because they can't be muted remotely.
+2. It saves your device, shuffle, repeat, volume and what you had loaded (track and position), then mutes and turns shuffle off.
+3. It plays the playlist at a few positions for about a second each, reading the queue and verifying each track against
+   the position it plays from. This also finds where the playlist ends and autoplay begins.
+   A 30-track Discover Weekly takes about 10 brief starts, each well under the 30 seconds that counts as a stream.
+4. It pauses and restores everything: what was loaded and where, shuffle, repeat, volume and the previously active device.
+   Smart Shuffle isn't exposed by the API, so it's left alone.
+
+It retries hourly until it has added this week's songs (Discover Weekly may refresh after 4 AM). If it never found an
+idle desktop app by Tuesday 11:30 PM, it emails you so you can copy the list by hand. Leave the Spotify desktop app open
+and the computer awake on Monday mornings for it to run unattended.
+
+Caveats: it needs the playback permissions (`user-read-playback-state`, `user-modify-playback-state`), so existing
+setups must re-approve once. Spotify may treat the brief starts as skips; it's a handful per week, but the effect on
+recommendations is unknown.
 
 ## Playlist IDs vs names
 

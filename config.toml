@@ -13,6 +13,9 @@
 #   mode = "rolling"   (recent) playlist of your last `keep` distinct tracks, newest first (default keep = 100)
 #   mode = "archive"   (recent) every distinct track you play, added once and kept forever
 #   only_from = "<playlist link/ID>"   (recent) only plays whose source was that playlist, e.g. Discover Weekly
+#   via = "playback"   read a playlist the API won't give us (Discover Weekly) by briefly playing it,
+#                      muted, on an idle Spotify desktop app; weekly; restores your player afterwards
+#   device = "<name>"  (playback) use this Spotify device instead of any computer
 #   enabled  = false   skip this job
 
 [[sync]]
@@ -44,3 +47,12 @@ from = "recent"
 only_from = "37i9dQZEVXcFznARRTnOdi"   # your Discover Weekly (Share > Copy link to playlist)
 to   = "41JXOe9PZ9g6v2PUW687l6"        # All Weeklies
 mode = "archive"
+
+# The FULL Discover Weekly list, including songs you never play. Opt-in: every Monday from 4 AM
+# (Pacific) it briefly plays Discover Weekly, muted, on an idle Spotify desktop app to read it,
+# then restores shuffle, repeat, volume and what you had loaded. Needs the desktop app open.
+[[sync]]
+name = "Discover Weekly full list -> All Weeklies"
+from = "37i9dQZEVXcFznARRTnOdi"        # your Discover Weekly
+to   = "41JXOe9PZ9g6v2PUW687l6"        # All Weeklies
+via  = "playback"

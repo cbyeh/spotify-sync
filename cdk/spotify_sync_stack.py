@@ -37,8 +37,13 @@ class SpotifySyncStack(Stack):
                  param_prefix: str = "/spotify-sync",
                  alert_email: str | None = None,
                  sync_schedule: str = "rate(1 minute)",
-                 full_check_schedule: str = "cron(30 11 * * ? *)",
-                 reminder_schedule: str = "cron(0 17 * * ? *)",
+                 # all schedules below are in `timezone`
+                 full_check_schedule: str = "cron(30 3 * * ? *)",     # 3:30 AM daily
+                 reminder_schedule: str = "cron(0 9 * * ? *)",        # 9 AM daily renewal check
+                 # via = "playback" jobs: hourly Mon 4 AM - Tue 11 PM local time, final try Tue 11:30 PM
+                 playback_schedule: str = "cron(0 4-23 ? * MON-TUE *)",
+                 playback_final_schedule: str = "cron(30 23 ? * TUE *)",
+                 timezone: str = "America/Los_Angeles",
                  **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
         prefix = "/" + param_prefix.strip("/")
@@ -71,10 +76,12 @@ class SpotifySyncStack(Stack):
 
         # 5 minutes: a cold start may have to page through a large archive (~7k tracks ≈ 50 s)
         sync_fn = make_function("SyncFunction", "spotify-sync", "aws.lambda_function.handler",
-                                {"PARAM_PREFIX": prefix}, timeout=Duration.minutes(5))
+                                {"PARAM_PREFIX": prefix, "TOPIC_ARN": topic.topic_arn},
+                                timeout=Duration.minutes(5))
         auth_fn = make_function("AuthFunction", "spotify-sync-auth", "aws.auth_function.handler",
                                 {"PARAM_PREFIX": prefix, "TOPIC_ARN": topic.topic_arn})
         topic.grant_publish(auth_fn)
+        topic.grant_publish(sync_fn)   # "couldn't copy Discover Weekly this week" emails
 
         # --- public approval URL (guarded in code by the secret link key)
         url = auth_fn.add_function_url(auth_type=lambda_.FunctionUrlAuthType.NONE)
@@ -98,9 +105,12 @@ class SpotifySyncStack(Stack):
             # once a day, ignore the "anything new?" shortcut and re-check every playlist
             ("FullCheckSchedule", "spotify-sync-full", full_check_schedule, sync_fn, '{"full":true}'),
             ("ReminderSchedule", "spotify-sync-reminder", reminder_schedule, auth_fn, '{"action":"remind"}'),
+            ("PlaybackSchedule", "spotify-sync-playback", playback_schedule, sync_fn, '{"playback":true}'),
+            ("PlaybackFinalSchedule", "spotify-sync-playback-final", playback_final_schedule, sync_fn,
+             '{"playback":true,"final":true}'),
         ]:
             scheduler.CfnSchedule(
-                self, cid, name=name, schedule_expression=expr,
+                self, cid, name=name, schedule_expression=expr, schedule_expression_timezone=timezone,
                 flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
                 target=scheduler.CfnSchedule.TargetProperty(
                     arn=fn.function_arn, role_arn=scheduler_role.role_arn, input=payload,

@@ -8,7 +8,8 @@ Runs every minute. To stay cheap, each job first asks "anything new?" (newest li
 play / playlist snapshot) and compares it with what it saw last time, stored under
 <prefix>/state/. Only when something changed does it read and write playlists.
 Invoke with {"full": true} to ignore that and re-check everything (a daily schedule does this),
-or {"dry_run": true} to see what would change.
+or {"dry_run": true} to see what would change. {"playback": true} runs only the via = "playback"
+jobs (weekly schedule); add "final": true on the last attempt so you get an email if it never ran.
 """
 import datetime as dt
 import os
@@ -19,7 +20,8 @@ import spotify_sync
 
 PREFIX = os.environ.get("PARAM_PREFIX", "/spotify-sync").rstrip("/")
 LOCK = f"{PREFIX}/lock"
-LOCK_STALE_SECONDS = 300
+LOCK_STALE_SECONDS = 360   # longer than the 5-minute function timeout
+TOPIC_ARN = os.environ.get("TOPIC_ARN", "")
 ssm = boto3.client("ssm")
 
 _session: spotify_sync.Spotify | None = None   # reused across warm invocations until the token expires
@@ -86,6 +88,13 @@ def _release_lock() -> None:
         pass
 
 
+def _notify(subject: str, message: str) -> None:
+    if TOPIC_ARN:
+        boto3.client("sns").publish(TopicArn=TOPIC_ARN, Subject=subject[:100], Message=message)
+    else:
+        print(f"::warning::{subject} (no TOPIC_ARN set, so no email)")
+
+
 def _config_path() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
     # a flat zip has config.toml next to this file; the CDK asset keeps the repo layout (one level up)
@@ -98,6 +107,8 @@ def handler(event, context):
     event = event or {}
     dry_run = bool(event.get("dry_run", False))
     full = bool(event.get("full", False))
+    playback = bool(event.get("playback", False))
+    final = bool(event.get("final", False))
 
     if _session is None or _session.expired:
         if not _load_secrets():
@@ -109,11 +120,12 @@ def handler(event, context):
         print("Previous run still in progress; skipping.")
         return {"ok": True, "skipped": "locked"}
     try:
-        errors = spotify_sync.run_all(_config_path(), dry_run, state=SsmState(), full=full, sp=_session)
+        errors = spotify_sync.run_all(_config_path(), dry_run, state=SsmState(), full=full, sp=_session,
+                                      playback=playback, final=final, notify=_notify)
     finally:
         _release_lock()
     if errors:
         _session = None   # start fresh next time (e.g. if the token was revoked)
         # Raising marks the invocation as failed, which feeds the error alarm.
         raise RuntimeError("; ".join(errors))
-    return {"ok": True, "full": full}
+    return {"ok": True, "full": full, "playback": playback}

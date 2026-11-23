@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime as dt
 import http.server
 import json
 import os
@@ -51,6 +52,8 @@ SCOPES = " ".join([
     "playlist-read-collaborative",   # read collaborative playlists
     "playlist-modify-private",       # add to private playlists
     "playlist-modify-public",        # add to public playlists
+    "user-read-playback-state",      # via = "playback" jobs: see devices, queue, what's playing
+    "user-modify-playback-state",    # via = "playback" jobs: briefly play a playlist (muted), then restore
 ])
 
 MADE_FOR_YOU_HINT = (
@@ -243,6 +246,159 @@ class Spotify:
             self.add_to_playlist(playlist_id, uris[100:])
 
 
+# --------------------------------------------------------------------------- read a playlist by playing it
+
+class PlaybackUnavailable(Exception):
+    """Can't use playback right now (music is playing, or no suitable Spotify app is open)."""
+
+
+def _track_obj_uri(obj: dict | None) -> str | None:
+    if not obj or obj.get("type") != "track" or obj.get("is_local"):
+        return None
+    return obj.get("uri")
+
+
+def _wait_until(sp: "Spotify", ok, timeout: float = 8.0) -> dict | None:
+    """Poll what's playing until ok(state) is true; None on timeout."""
+    end = time.time() + timeout
+    while True:
+        cur = sp.request("GET", "/me/player/currently-playing") or {}
+        if ok(cur):
+            return cur
+        if time.time() >= end:
+            return None
+        SLEEP(0.5)
+
+
+SLEEP = time.sleep   # replaced in tests
+
+
+def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = None,
+                     device_types: tuple = ("Computer",), max_tracks: int = 200) -> list[str]:
+    """Read a playlist the API won't let us read (e.g. Discover Weekly) by briefly playing it,
+    muted, on an idle Spotify app, then putting everything back the way it was.
+
+    Plays at most a handful of positions (each for ~1 second, well under the 30 s a stream needs):
+    the first track plus the queue gives ~21 tracks; jumping to later positions verifies each
+    candidate really belongs to the playlist, which also finds where the playlist ends and
+    autoplay begins. Raises PlaybackUnavailable if something is playing or no device fits."""
+    ctx = f"spotify:playlist:{playlist_id}"
+    before = sp.request("GET", "/me/player") or {}
+    if before.get("is_playing"):
+        raise PlaybackUnavailable("something is playing right now")
+    devices = sp.request("GET", "/me/player/devices").get("devices", [])
+    device = next((d for d in devices if not d.get("is_restricted") and (
+        d.get("name") == device_name if device_name else d.get("type") in device_types)), None)
+    if not device:
+        wanted = f'"{device_name}"' if device_name else "a computer"
+        raise PlaybackUnavailable(f"no idle Spotify app open on {wanted}")
+    did = device["id"]
+    q = f"device_id={did}"
+
+    # Activate the device without playing, then record its state so we can restore it exactly.
+    sp.request("PUT", "/me/player", {"device_ids": [did], "play": False})
+    state = sp.request("GET", "/me/player") or {}
+    if state.get("is_playing"):
+        raise PlaybackUnavailable("something started playing")
+    prev = {
+        "device": (before.get("device") or {}).get("id"),
+        "shuffle": state.get("shuffle_state"),
+        "repeat": state.get("repeat_state"),
+        "volume": (state.get("device") or {}).get("volume_percent", device.get("volume_percent")),
+        "context": (state.get("context") or {}).get("uri"),
+        "item": _track_obj_uri(state.get("item")),
+        "progress": state.get("progress_ms") or 0,
+    }
+    can_mute = device.get("supports_volume", True) and prev["volume"] is not None
+
+    def play_at(pos: int) -> None:
+        sp.request("PUT", f"/me/player/play?{q}", {"context_uri": ctx, "offset": {"position": pos}})
+
+    def playing(c: dict) -> bool:
+        return bool(c.get("is_playing")) and (c.get("context") or {}).get("uri") == ctx
+
+    def check(pos: int, expected: str) -> bool:
+        try:
+            play_at(pos)
+        except SpotifyError:
+            return False
+        return _wait_until(sp, lambda c: playing(c) and _track_obj_uri(c.get("item")) == expected,
+                           timeout=6) is not None
+
+    try:
+        if can_mute:
+            sp.request("PUT", f"/me/player/volume?volume_percent=0&{q}")
+        sp.request("PUT", f"/me/player/shuffle?state=false&{q}")
+        sp.request("PUT", f"/me/player/repeat?state=off&{q}")
+
+        play_at(0)
+        cur = _wait_until(sp, playing)
+        if not cur:
+            raise PlaybackUnavailable("Spotify didn't start the playlist")
+        tracks = [_track_obj_uri(cur.get("item"))]   # confirmed members, in playlist order
+        one_by_one = False
+        while len(tracks) < max_tracks:
+            if not one_by_one:
+                # The queue shows what comes next: the rest of the playlist, then possibly autoplay.
+                queue = sp.request("GET", "/me/player/queue").get("queue", [])
+                candidates = tracks + [u for u in map(_track_obj_uri, queue) if u]
+                lo, hi = len(tracks) - 1, len(candidates) - 1
+                if hi > lo and check(hi, candidates[hi]):
+                    lo = hi                       # common case: the whole queue is playlist
+                else:
+                    while lo < hi - 1:            # find where the playlist ends inside the queue
+                        mid = (lo + hi) // 2
+                        if check(mid, candidates[mid]):
+                            lo = mid
+                        else:
+                            hi = mid
+                if lo == len(tracks) - 1 and len(candidates) > len(tracks):
+                    one_by_one = True             # queue doesn't line up (e.g. songs you queued by hand)
+                tracks = candidates[:lo + 1]
+            # Start at the next position: either finds one more track or confirms the end.
+            try:
+                play_at(len(tracks))
+            except SpotifyError:
+                break
+            nxt = _wait_until(sp, lambda c: playing(c) and _track_obj_uri(c.get("item")) not in tracks,
+                              timeout=6)
+            if not nxt:
+                break
+            tracks.append(_track_obj_uri(nxt.get("item")))
+        result = [u for u in tracks if u]
+    finally:
+        _restore(sp, did, prev, can_mute)
+    return list(dict.fromkeys(result))
+
+
+def _restore(sp: "Spotify", did: str, prev: dict, can_mute: bool) -> None:
+    """Put playback back exactly as it was; best effort, never raises."""
+    q = f"device_id={did}"
+
+    def attempt(method, path, body=None):
+        try:
+            sp.request(method, path, body)
+        except SpotifyError as e:
+            print(f"::warning::restore step failed: {method} {path}: {e}")
+
+    attempt("PUT", f"/me/player/pause?{q}")
+    if prev["item"]:
+        body = ({"context_uri": prev["context"], "offset": {"uri": prev["item"]}} if prev["context"]
+                else {"uris": [prev["item"]]})
+        body["position_ms"] = prev["progress"]
+        attempt("PUT", f"/me/player/play?{q}", body)
+        _wait_until(sp, lambda c: c.get("is_playing") and _track_obj_uri(c.get("item")) == prev["item"], timeout=5)
+        attempt("PUT", f"/me/player/pause?{q}")
+    if prev["shuffle"] is not None:
+        attempt("PUT", f"/me/player/shuffle?state={'true' if prev['shuffle'] else 'false'}&{q}")
+    if prev["repeat"]:
+        attempt("PUT", f"/me/player/repeat?state={prev['repeat']}&{q}")
+    if can_mute:
+        attempt("PUT", f"/me/player/volume?volume_percent={prev['volume']}&{q}")
+    if prev["device"] and prev["device"] != did:
+        attempt("PUT", "/me/player", {"device_ids": [prev["device"]], "play": False})
+
+
 # --------------------------------------------------------------------------- sync logic
 
 def new_from_liked(sp: Spotify, existing: set[str], backfill: bool) -> list[str]:
@@ -319,6 +475,53 @@ def state_key(job: dict) -> str:
     return f"{src}-{parse_playlist_id(job['to'])}"
 
 
+def is_playback_job(job: dict) -> bool:
+    via = job.get("via")
+    if via not in (None, "playback"):
+        raise ValueError('`via` must be "playback" (or left out)')
+    return via == "playback"
+
+
+def run_playback_job(sp: Spotify, job: dict, dry_run: bool, state=None,
+                     final: bool = False, notify=None) -> int:
+    """Copy a playlist the API can't read (e.g. Discover Weekly) by briefly playing it.
+    Runs at most once per week: retried until it adds something new (the playlist may not have
+    refreshed yet) or until the `final` attempt, which emails you if it never got a chance."""
+    name = job.get("name", "(unnamed)")
+    src_id, dest_id = parse_playlist_id(job["from"]), parse_playlist_id(job["to"])
+    year, week, _ = dt.datetime.now(dt.timezone.utc).isocalendar()
+    key, tag = f"playback-{src_id}-{dest_id}", f"{year}-W{week:02d}"
+    if state is not None and state.get(key) == tag:
+        print(f"[{name}] already done this week.")
+        return 0
+    try:
+        uris = read_by_playback(sp, src_id, device_name=job.get("device"))
+        if not uris:
+            raise PlaybackUnavailable("couldn't read any tracks")
+    except PlaybackUnavailable as e:
+        print(f"[{name}] not this time: {e}.")
+        if final and notify:
+            notify(f"spotify-sync: couldn't copy {name} this week",
+                   f"{name}: {e} at every attempt this week.\n\n"
+                   "Open the playlist in Spotify, select all (Ctrl/Cmd+A) and add the songs to your archive. "
+                   "The sync skips any that are already there.\n\n"
+                   "To let it run automatically, leave the Spotify desktop app open (and the computer awake) "
+                   "on Monday mornings.")
+        return 0
+    existing = set(sp.playlist_uris(dest_id))
+    new = [u for u in uris if u not in existing]
+    verb = "Would add" if dry_run else "Adding"
+    print(f"[{name}] read {len(uris)} tracks by playback; {verb} {len(new)} new.")
+    if new and not dry_run:
+        sp.add_to_playlist(dest_id, new)
+    if state is not None and not dry_run:
+        if new or final:
+            state.set(key, tag)
+        else:
+            print(f"[{name}] nothing new yet (playlist may not have refreshed); will retry.")
+    return len(new)
+
+
 def run_job(sp: Spotify, job: dict, dry_run: bool, state=None, full: bool = False) -> int:
     """Run one job. With a `state` store (get/set), skip quickly when the source hasn't changed
     since the last successful run, unless `full` is set."""
@@ -391,17 +594,24 @@ def load_config(path: str) -> list[dict]:
 # --------------------------------------------------------------------------- commands
 
 def run_all(config_path: str, dry_run: bool = False, on_new_refresh_token=None,
-            state=None, full: bool = False, sp: Spotify | None = None) -> list[str]:
+            state=None, full: bool = False, sp: Spotify | None = None,
+            playback: bool = False, final: bool = False, notify=None) -> list[str]:
     """Run every job; returns a list of error messages (empty means all succeeded).
-    Pass a `state` store to enable quick "anything new?" checks, and `sp` to reuse a session."""
-    jobs = load_config(config_path)
+    Pass a `state` store to enable quick "anything new?" checks, and `sp` to reuse a session.
+    `playback=True` runs only the via = "playback" jobs (they have their own weekly schedule)."""
+    jobs = [j for j in load_config(config_path) if is_playback_job(j) == playback]
+    if not jobs:
+        return []
     if sp is None or sp.expired:
         sp = Spotify.from_env(on_new_refresh_token)
     sp.new_run()
     errors = []
     for job in jobs:
         try:
-            run_job(sp, job, dry_run, state, full)
+            if playback:
+                run_playback_job(sp, job, dry_run, state, final, notify)
+            else:
+                run_job(sp, job, dry_run, state, full)
         except (SpotifyError, ValueError) as e:
             msg = f"[{job.get('name', '(unnamed)')}] {e}"
             errors.append(msg)
@@ -410,7 +620,7 @@ def run_all(config_path: str, dry_run: bool = False, on_new_refresh_token=None,
 
 
 def cmd_run(args) -> int:
-    return 1 if run_all(args.config, args.dry_run) else 0
+    return 1 if run_all(args.config, args.dry_run, playback=args.playback) else 0
 
 
 def cmd_playlists(args) -> int:
@@ -473,6 +683,7 @@ def main() -> int:
     r = sub.add_parser("run", help="run all sync jobs")
     r.add_argument("--config", default="config.toml")
     r.add_argument("--dry-run", action="store_true", help="show what would be added without adding it")
+    r.add_argument("--playback", action="store_true", help='run only the via = "playback" jobs')
     r.set_defaults(fn=cmd_run)
     args = ap.parse_args()
     return args.fn(args)
