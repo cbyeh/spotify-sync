@@ -1,0 +1,5 @@
+__pycache__/
+aws/build/
+aws/function.zip
+*.json
+.env

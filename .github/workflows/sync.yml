@@ -1,0 +1,31 @@
+name: Spotify sync
+
+on:
+  schedule:
+    - cron: "17 * * * *"   # hourly; GitHub may delay scheduled runs a bit
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (show what would be added)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: spotify-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run sync
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+        run: python spotify_sync.py run ${{ inputs.dry_run && '--dry-run' || '' }}

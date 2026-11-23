@@ -1,0 +1,32 @@
+# Each [[sync]] block is one "applet".
+#
+#   from = "liked"                  -> your Liked Songs
+#   from = "recent"                 -> your recently played tracks
+#   from = "<playlist link/ID>"     -> a playlist you own or collaborate on
+#   to   = "<playlist link/ID>"     -> the playlist to write into (must be yours)
+#
+# Playlist links: in Spotify, ... > Share > Copy link to playlist.
+# Or run `python spotify_sync.py playlists` to list IDs.
+#
+# Optional per job:
+#   backfill = true    (liked) copy your whole Liked Songs history, not just new likes
+#   keep = 100         (recent) rolling playlist of your last N distinct tracks, newest first.
+#                      Omit `keep` to build a permanent, append-only listening archive instead.
+#   enabled  = false   skip this job
+
+[[sync]]
+name = "Liked Songs backup"
+from = "liked"
+to   = "1k6vxCv3Z389o9QK2qaxD7"   # Liked songs backUP
+backfill = false
+
+# Create an empty playlist (e.g. "Recently Played"), paste its link below, and set enabled = true.
+[[sync]]
+name = "Recently played"
+from = "recent"
+to   = "PASTE_RECENTLY_PLAYED_PLAYLIST_LINK_HERE"
+keep = 100
+enabled = false
+
+# Discover Weekly -> "All Weeklies" (41JXOe9PZ9g6v2PUW687l6) can't be automated:
+# Spotify blocks personal apps from reading Discover Weekly. See README.
