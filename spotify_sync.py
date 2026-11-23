@@ -278,7 +278,7 @@ SLEEP = time.sleep   # replaced in tests
 
 def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = None,
                      device_types: tuple = ("Computer",), max_tracks: int = 60,
-                     trace: bool = False) -> list[str]:
+                     trace: bool = False, take: int | None = None) -> list[str]:
     """Read a playlist the API won't let us read (e.g. Discover Weekly) by briefly playing it,
     muted, on an idle Spotify app, then putting everything back the way it was.
 
@@ -287,7 +287,13 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
     candidate really belongs to the playlist, which also finds where the playlist ends and
     autoplay begins. Raises PlaybackUnavailable if something is playing, no device fits, the
     player state can't be read (nothing is changed then), or it reads more than `max_tracks`
-    (a safety net: nothing is added). `trace=True` logs every position it plays."""
+    (a safety net: nothing is added). `trace=True` logs every position it plays.
+
+    `take`: read exactly this many positions (e.g. 30 for Discover Weekly). Spotify keeps serving
+    tracks past the end of some generated playlists while still reporting the playlist as the
+    source, so "play until it stops" can't find their end; a known length avoids that."""
+    if take:
+        max_tracks = take + 1
     ctx = f"spotify:playlist:{playlist_id}"
     before = sp.request("GET", "/me/player") or {}
     if before.get("is_playing"):
@@ -376,13 +382,14 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
         log(f"pos 0: {describe(cur)}")
         tracks = [_track_obj_uri(cur.get("item"))]   # confirmed members, in playlist order
         one_by_one = False
-        while len(tracks) < max_tracks:
+        limit = take or max_tracks
+        while len(tracks) < limit:
             if not one_by_one:
                 # The queue shows what comes next: the rest of the playlist, then possibly autoplay.
                 queue = sp.request("GET", "/me/player/queue").get("queue", [])
                 log(f"queue after {len(tracks)}: {len(queue)} items: " +
                     ", ".join(q.get("name", "?")[:20] for q in queue[:20]))
-                candidates = tracks + [u for u in map(_track_obj_uri, queue) if u]
+                candidates = (tracks + [u for u in map(_track_obj_uri, queue) if u])[:limit]
                 lo, hi = len(tracks) - 1, len(candidates) - 1
                 if hi > lo and check(hi, candidates[hi]):
                     lo = hi                       # common case: the whole queue is playlist
@@ -396,6 +403,8 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
                 if lo == len(tracks) - 1 and len(candidates) > len(tracks):
                     one_by_one = True             # queue doesn't line up (e.g. songs you queued by hand)
                 tracks = candidates[:lo + 1]
+            if len(tracks) >= limit:
+                break
             # Start at the next position: either finds one more track or confirms the end.
             try:
                 play_at(len(tracks))
@@ -410,9 +419,11 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
                 break
             log(f"probe {len(tracks)}: {describe(nxt)}")
             tracks.append(_track_obj_uri(nxt.get("item")))
-        result = [u for u in tracks if u]
+        result = [u for u in tracks if u][:limit]
         print(f"playback: read {len(result)} tracks")
-        if len(result) >= max_tracks:
+        if take and len(result) < take:
+            print(f"::warning::expected {take} tracks but the playlist ended after {len(result)}")
+        if not take and len(result) >= max_tracks:
             raise PlaybackUnavailable(f"read {len(result)}+ tracks, more than the {max_tracks} expected; "
                                       "not trusting this read, nothing added")
     finally:
@@ -421,7 +432,12 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
 
 
 def _restore(sp: "Spotify", did: str, prev: dict, can_mute: bool) -> None:
-    """Put playback back exactly as it was; best effort, never raises."""
+    """Put playback back the way it was; best effort, never raises.
+
+    Spotify applies player commands asynchronously (a pause can land before a play, and loading
+    a context can reset shuffle/repeat), so after issuing the commands we re-read the player and
+    keep correcting until it matches. The volume is only restored once the player is confirmed
+    paused: if that can't be confirmed, the device stays muted rather than playing out loud."""
     q = f"device_id={did}"
 
     def attempt(method, path, body=None):
@@ -432,6 +448,12 @@ def _restore(sp: "Spotify", did: str, prev: dict, can_mute: bool) -> None:
                 return   # already paused
             print(f"::warning::restore step failed: {method} {path}: {e}")
 
+    def current() -> dict:
+        try:
+            return sp.request("GET", "/me/player") or {}
+        except SpotifyError:
+            return {}
+
     print("playback: restoring player")
     attempt("PUT", f"/me/player/pause?{q}")
     if prev["item"]:
@@ -439,23 +461,39 @@ def _restore(sp: "Spotify", did: str, prev: dict, can_mute: bool) -> None:
                 else {"uris": [prev["item"]]})
         body["position_ms"] = prev["progress"]
         attempt("PUT", f"/me/player/play?{q}", body)
-        _wait_until(sp, lambda c: c.get("is_playing") and _track_obj_uri(c.get("item")) == prev["item"], timeout=5)
+        # let the reload land before touching anything else
+        _wait_until(sp, lambda c: c.get("is_playing") and _track_obj_uri(c.get("item")) == prev["item"], timeout=8)
+
+    paused = False
+    for _ in range(8):
         attempt("PUT", f"/me/player/pause?{q}")
-    if prev["shuffle"] is not None:
-        attempt("PUT", f"/me/player/shuffle?state={'true' if prev['shuffle'] else 'false'}&{q}")
-    if prev["repeat"]:
-        attempt("PUT", f"/me/player/repeat?state={prev['repeat']}&{q}")
+        if prev["shuffle"] is not None:
+            attempt("PUT", f"/me/player/shuffle?state={'true' if prev['shuffle'] else 'false'}&{q}")
+        if prev["repeat"]:
+            attempt("PUT", f"/me/player/repeat?state={prev['repeat']}&{q}")
+        SLEEP(1.5)
+        cur = current()
+        paused = cur.get("is_playing") is False
+        ok = (paused
+              and (prev["shuffle"] is None or cur.get("shuffle_state") == prev["shuffle"])
+              and (not prev["repeat"] or cur.get("repeat_state") == prev["repeat"])
+              and (not prev["item"] or _track_obj_uri(cur.get("item")) == prev["item"]))
+        if ok:
+            break
+    else:
+        print("::warning::player didn't fully match its previous state after restoring")
+
     if can_mute:
-        attempt("PUT", f"/me/player/volume?volume_percent={prev['volume']}&{q}")
+        if paused:
+            attempt("PUT", f"/me/player/volume?volume_percent={prev['volume']}&{q}")
+        else:
+            print("::warning::couldn't confirm the player is paused, so it was left muted")
+    after = current()
+    print(f"playback: after restore: shuffle={after.get('shuffle_state')}, repeat={after.get('repeat_state')}, "
+          f"volume={(after.get('device') or {}).get('volume_percent')}, "
+          f"item='{(after.get('item') or {}).get('name')}', playing={after.get('is_playing')}")
     if prev["device"] and prev["device"] != did:
         attempt("PUT", "/me/player", {"device_ids": [prev["device"]], "play": False})
-    try:
-        after = sp.request("GET", "/me/player") or {}
-        print(f"playback: after restore: shuffle={after.get('shuffle_state')}, repeat={after.get('repeat_state')}, "
-              f"volume={(after.get('device') or {}).get('volume_percent')}, "
-              f"item='{(after.get('item') or {}).get('name')}', playing={after.get('is_playing')}")
-    except SpotifyError:
-        pass
 
 
 # --------------------------------------------------------------------------- sync logic
@@ -554,8 +592,10 @@ def run_playback_job(sp: Spotify, job: dict, dry_run: bool, state=None,
         print(f"[{name}] already done this week.")
         return 0
     try:
+        take = job.get("take", 30)
         uris = read_by_playback(sp, src_id, device_name=job.get("device"),
-                                max_tracks=int(job.get("max_tracks", 60)), trace=bool(job.get("trace") or dry_run))
+                                max_tracks=int(job.get("max_tracks", 60)), trace=bool(job.get("trace") or dry_run),
+                                take=int(take) if take else None)
         if not uris:
             raise PlaybackUnavailable("couldn't read any tracks")
     except PlaybackUnavailable as e:

@@ -16,6 +16,7 @@
 #   via = "playback"   read a playlist the API won't give us (Discover Weekly) by briefly playing it,
 #                      muted, on an idle Spotify desktop app; weekly; restores your player afterwards
 #   device = "<name>"  (playback) use this Spotify device instead of any computer
+#   take = 30          (playback) how many tracks the playlist has (Discover Weekly: 30, the default)
 #   enabled  = false   skip this job
 
 [[sync]]
