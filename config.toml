@@ -20,13 +20,13 @@ from = "liked"
 to   = "1k6vxCv3Z389o9QK2qaxD7"   # Liked songs backUP
 backfill = false
 
-# Create an empty playlist (e.g. "Recently Played"), paste its link below, and set enabled = true.
+# Rolling playlist of your last 100 distinct tracks, newest first.
+# Remove `keep` to make it an append-only listening archive instead.
 [[sync]]
 name = "Recently played"
 from = "recent"
-to   = "PASTE_RECENTLY_PLAYED_PLAYLIST_LINK_HERE"
+to   = "5PDaSAK5sFZWzN6yPz5bXN"   # Recently Played
 keep = 100
-enabled = false
 
 # Discover Weekly -> "All Weeklies" (41JXOe9PZ9g6v2PUW687l6) can't be automated:
 # Spotify blocks personal apps from reading Discover Weekly. See README.
