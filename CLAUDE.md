@@ -13,8 +13,9 @@ work on it safely.
 - `aws/auth_function.py`: the approval/renewal Lambda behind a public function URL (`/start?k=<link key>`,
   `/callback`, daily `{"action":"remind"}`, `{"action":"link"}`).
 - `cdk/`: Python CDK app describing the same infrastructure. **Never synthesized or deployed yet** (see below).
-- `tests/`: dependency-free tests using fakes. Run `python tests/test_sync_logic.py`, `python tests/test_playback.py`
-  and `python tests/test_cache.py`.
+- `aws/spend_cap_function.py`: account-wide spend-cap kill switch (see "Spend cap" below). Not part of the CDK stack.
+- `tests/`: dependency-free tests using fakes. Run `python tests/test_sync_logic.py`, `python tests/test_playback.py`,
+  `python tests/test_cache.py` and `python tests/test_spend_cap.py`.
 - `.github/workflows/sync.yml`: alternative hourly runner on GitHub Actions. It skips when secrets aren't set,
   which they aren't for the owner.
 
@@ -35,6 +36,15 @@ All in us-west-2:
 - SSM `/spotify-sync/*`: `client-id`, `client-secret`, `refresh-token`, `refresh-token-issued`, `link-key`, `user-id`,
   `last-reminded` (SecureString or String), and `state/*`. **These are the only copy of the secrets. Never delete or
   print them.**
+- **Spend cap (account-wide, covers litonwalls too).** Budget `spend-cap-2usd` ($2/month, actual): emails at 50% and
+  forecast 100%; at actual 100% it emails and publishes to SNS `spend-cap`, which invokes Lambda `spend-cap-killswitch`
+  (role `spend-cap-killswitch`, source `aws/spend_cap_function.py`). The kill switch, in us-west-2, disables every enabled
+  schedule, sets reserved concurrency 0 on every other Lambda, and turns Block Public Access fully on for every bucket.
+  It deletes nothing and records what it changed in SSM `/spend-cap/frozen`. Undo: invoke it with `{"action":"restore"}`
+  (raise the budget first if still over). Preview: `{"action":"freeze","dry_run":true}`. **Don't publish to the
+  `spend-cap` topic to test it: any SNS message is a real freeze.** The CDK migration deletes and recreates the
+  spotify-sync schedules/Lambdas; the kill switch lists them at freeze time, so no change is needed there. The older
+  `My Monthly Cost Budget` ($3, email-only) is the owner's and was left as is.
 - How the live code got deployed: the cloud session couldn't upload zips, so a temporary CloudFormation-inline
   "builder" Lambda downloaded a pinned GitHub commit and called UpdateFunctionCode. Locally you can just
   zip `spotify_sync.py config.toml aws/lambda_function.py aws/auth_function.py` **flat** (no folders) and run
