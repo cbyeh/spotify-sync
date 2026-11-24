@@ -363,7 +363,7 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
         except SpotifyError as e:
             log(f"check {pos}: play refused ({str(e)[-80:]})")
             return False
-        ok = _wait_until(sp, lambda c: playing(c) and _track_obj_uri(c.get("item")) == expected, timeout=6)
+        ok = _wait_until(sp, lambda c: playing(c) and _track_obj_uri(c.get("item")) == expected, timeout=8)
         if trace:
             now = sp.request("GET", "/me/player/currently-playing") or {}
             log(f"check {pos}: {'OK ' if ok else 'NO '} now {describe(now)}")
@@ -371,12 +371,13 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
 
     try:
         if can_mute:
+            # If muting fails, this raises and nothing gets played out loud.
             sp.request("PUT", f"/me/player/volume?volume_percent=0&{q}")
         sp.request("PUT", f"/me/player/shuffle?state=false&{q}")
         sp.request("PUT", f"/me/player/repeat?state=off&{q}")
 
         play_at(0)
-        cur = _wait_until(sp, playing)
+        cur = _wait_until(sp, playing, timeout=20)   # a receiver waking from standby can be slow
         if not cur:
             raise PlaybackUnavailable("Spotify didn't start the playlist")
         log(f"pos 0: {describe(cur)}")

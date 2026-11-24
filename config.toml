@@ -50,10 +50,11 @@ to   = "41JXOe9PZ9g6v2PUW687l6"        # All Weeklies
 mode = "archive"
 
 # The FULL Discover Weekly list, including songs you never play. Opt-in: every Monday from 4 AM
-# (Pacific) it briefly plays Discover Weekly, muted, on an idle Spotify desktop app to read it,
-# then restores shuffle, repeat, volume and what you had loaded. Needs the desktop app open.
+# (Pacific) it briefly plays Discover Weekly, muted, to read it, then restores shuffle, repeat,
+# volume and what you had loaded. Uses the Yamaha receiver (Spotify Connect, network standby on).
 [[sync]]
 name = "Discover Weekly full list -> All Weeklies"
 from = "37i9dQZEVXcFznARRTnOdi"        # your Discover Weekly
 to   = "41JXOe9PZ9g6v2PUW687l6"        # All Weeklies
 via  = "playback"
+device = "Maison Yee"                  # Yamaha RX-A2A
