@@ -20,6 +20,7 @@ import spotify_sync
 
 PREFIX = os.environ.get("PARAM_PREFIX", "/spotify-sync").rstrip("/")
 LOCK = f"{PREFIX}/lock"
+BACKOFF = f"{PREFIX}/state/backoff-until"   # set when Spotify reports QUOTA_EXCEEDED
 LOCK_STALE_SECONDS = 360   # longer than the 5-minute function timeout
 TOPIC_ARN = os.environ.get("TOPIC_ARN", "")
 ssm = boto3.client("ssm")
@@ -116,6 +117,14 @@ def handler(event, context):
             return {"ok": True, "skipped": "not approved yet"}
         _session = spotify_sync.Spotify.from_env(on_new_refresh_token=_save_refresh_token)
 
+    try:
+        until = dt.datetime.fromisoformat(ssm.get_parameter(Name=BACKOFF)["Parameter"]["Value"])
+        if dt.datetime.now(dt.timezone.utc) < until:
+            print(f"Spotify quota exhausted; paused until {until:%Y-%m-%d %H:%M} UTC.")
+            return {"ok": True, "skipped": "quota", "until": until.isoformat()}
+    except ssm.exceptions.ParameterNotFound:
+        pass
+
     if not _acquire_lock():
         print("Previous run still in progress; skipping.")
         return {"ok": True, "skipped": "locked"}
@@ -123,7 +132,13 @@ def handler(event, context):
         def run():
             return spotify_sync.run_all(_config_path(), dry_run, state=SsmState(), full=full, sp=_session,
                                         playback=playback, final=final, notify=_notify)
-        errors = run()
+        try:
+            errors = run()
+        except spotify_sync.QuotaExceeded as q:
+            until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=q.retry_after + 60)
+            ssm.put_parameter(Name=BACKOFF, Value=until.isoformat(), Type="String", Overwrite=True)
+            print(f"::warning::{q}. Pausing all runs until {until:%Y-%m-%d %H:%M} UTC.")
+            return {"ok": True, "skipped": "quota", "until": until.isoformat()}
         if any("-> 401" in e for e in errors):
             # The cached access token predates a re-approval (e.g. new permissions): get a fresh one.
             print("Access token rejected; refreshing and retrying once.")

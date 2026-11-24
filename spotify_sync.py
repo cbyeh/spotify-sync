@@ -67,6 +67,14 @@ class SpotifyError(Exception):
     pass
 
 
+class QuotaExceeded(SpotifyError):
+    """Spotify's quota for this developer account is used up; retry_after is in seconds."""
+
+    def __init__(self, message: str, retry_after: int):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 # --------------------------------------------------------------------------- helpers
 
 def env(name: str, required: bool = True) -> str | None:
@@ -175,7 +183,11 @@ class Spotify:
                     return {}   # some player commands answer with a non-JSON body
             except urllib.error.HTTPError as e:
                 if e.code == 429 or e.code >= 500:
-                    wait = int(e.headers.get("Retry-After", 2 ** attempt))
+                    wait = int(e.headers.get("Retry-After", 2 ** attempt) or 1)
+                    if e.code == 429 and wait > 120:
+                        # A quota reset hours away, not a brief rate limit: retrying now only burns time.
+                        raise QuotaExceeded(f"{method} {url} -> 429 quota exceeded; resets in "
+                                            f"{wait // 3600}h{wait % 3600 // 60:02d}m", wait) from None
                     time.sleep(min(wait, 60))
                     continue
                 detail = e.read().decode(errors="replace")
@@ -721,6 +733,8 @@ def run_all(config_path: str, dry_run: bool = False, on_new_refresh_token=None,
                 run_playback_job(sp, job, dry_run, state, final, notify)
             else:
                 run_job(sp, job, dry_run, state, full)
+        except QuotaExceeded:
+            raise   # the whole run should stop and back off, not just this job
         except (SpotifyError, ValueError) as e:
             msg = f"[{job.get('name', '(unnamed)')}] {e}"
             errors.append(msg)

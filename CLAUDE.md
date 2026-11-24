@@ -55,8 +55,12 @@ to the live setup above, plus `cdk/MIGRATION.md`. Review that PR, then on the ow
 - **Refresh tokens expire 6 months after approval**, and refreshing doesn't extend them. The auth Lambda emails a renewal link from day 150.
 - **Recently played** only records tracks that play to the end. Each play's `context.uri` says which playlist it came
   from, which is how `only_from` archives the Discover Weekly songs the owner plays.
-- **Rate limits (429)**: everything shares one quota per developer account, including the every-minute sync. Don't burst
-  through big playlists in diagnostics (All Weeklies has ~7.5k tracks = 75 pages). Throttle and honor `Retry-After`.
+- **Quota (429 `QUOTA_EXCEEDED`)**: Development Mode has a **daily** quota per developer account, and it's tracked
+  separately per endpoint family. On Nov 23 2026, reading playlists (`/playlists/{id}/items`) hit it with
+  `Retry-After` ≈ 20 h, while recently-played still worked. The cause was repeated full reads of All Weeklies
+  (~7.5k tracks = 75 pages each) plus diagnostics. The sync now raises `QuotaExceeded` when `Retry-After` > 120 s,
+  and the Lambda writes `/spotify-sync/state/backoff-until` and skips every run until then. **Never page through
+  big playlists in diagnostics.**
 - Some player commands return non-JSON bodies, and `Spotify.request` tolerates that.
 
 ## `via = "playback"` (full Discover Weekly copy): read before touching
@@ -77,14 +81,21 @@ tracks, then restores the player. Hard-won rules, each covered by tests in `test
 
 ## Open items
 
+0. This week's (Nov 23) full Discover Weekly copy failed on the quota. A one-time schedule
+   `spotify-sync-playback-retry` runs it on Tue Nov 24 2026 at 2 PM PT, after the reset, and deletes itself.
+   Check it worked.
+
 1. Review and merge the `cdk-parity` PR, then do the migration (above).
-2. Check All Weeklies (`41JXOe9PZ9g6v2PUW687l6`) for **pre-existing duplicates** from before this tool. The sync itself
+2. **Reduce playlist reads**: the destination cache (snapshot_id → track URIs) only lives in a warm Lambda, so every
+   cold start re-reads All Weeklies (75 pages). Persist it, e.g. as an S3 object (free tier) keyed by playlist and
+   snapshot_id, updated from our own adds' snapshot_id. That's the main fix for the quota problem.
+3. Check All Weeklies (`41JXOe9PZ9g6v2PUW687l6`) for **pre-existing duplicates** from before this tool. The sync itself
    never adds one (it dedupes by track URI against the whole playlist), but the first scan attempt hit a 429.
    Re-run slowly, report exact-URI duplicates and same-name/artist pairs, and ask the owner before removing anything.
-3. Verify the first real full Discover Weekly run on **Mon Nov 30, 2026, 4 AM PT** (logs: `aws logs tail /aws/lambda/spotify-sync`).
-4. Security housekeeping: rotate the Spotify client secret (it was pasted in a chat), and move the AWS MCP/CLI off
+4. Verify the first real full Discover Weekly run on **Mon Nov 30, 2026, 4 AM PT** (logs: `aws logs tail /aws/lambda/spotify-sync`).
+5. Security housekeeping: rotate the Spotify client secret (it was pasted in a chat), and move the AWS MCP/CLI off
    the root user to a scoped IAM user.
-5. litonwalls (separate repo, same account): bucket `litonwallz` has Block Public Access off and posted images are
+6. litonwalls (separate repo, same account): bucket `litonwallz` has Block Public Access off and posted images are
    public-read; its Instagram token is hardcoded. Suggested fix: presigned URLs for Instagram, then re-enable Block
    Public Access, and move the token to SSM.
 
