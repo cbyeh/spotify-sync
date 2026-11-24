@@ -30,7 +30,8 @@ All in us-west-2:
 - SNS topic `spotify-sync-alerts` (email subscription confirmed), alarm `spotify-sync-failing`, 14-day log groups.
 - S3 bucket `spotify-sync-cache-<account-id>-us-west-2` (private, Block Public Access, SSE-S3): `cache/<playlist>.json.gz`
   holds each destination's snapshot_id + track URIs, so cold starts and the daily full check don't re-read big playlists.
-  It's safe to delete (it's only a cache); the role may only Get/Put/Delete `cache/*`.
+  It's safe to delete (it's only a cache). The role may only Get/Put/Delete `cache/*`, plus ListBucket limited to the
+  `cache/` prefix (without it, S3 reports a missing key as AccessDenied instead of NoSuchKey).
 - SSM `/spotify-sync/*`: `client-id`, `client-secret`, `refresh-token`, `refresh-token-issued`, `link-key`, `user-id`,
   `last-reminded` (SecureString or String), and `state/*`. **These are the only copy of the secrets. Never delete or
   print them.**
