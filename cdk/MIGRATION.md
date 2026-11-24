@@ -26,6 +26,7 @@ All commands are PowerShell, run from the repo root unless a step says otherwise
 | **Changes** | Old CloudWatch logs are deleted with the hand-built log groups (they only kept 14 days anyway). |
 | **Changes** | Both functions get `TOPIC_ARN` and `PARAM_PREFIX` only. `spotify-sync-auth` no longer has `AUTH_BASE_URL` (see below). The code package keeps the repo layout, so the handlers are `aws.lambda_function.handler` and `aws.auth_function.handler`. |
 | **New** | The stack owns one plain String parameter, `/spotify-sync/auth-url`, holding the new function URL. |
+| **Recreated** | The playlist cache bucket `spotify-sync-cache-<account>-<region>` (same name, now owned by the stack, retained on `cdk destroy`). It's only a cache: the first runs after the deploy re-read each destination playlist once and refill it. |
 
 ### Why `AUTH_BASE_URL` isn't needed any more
 
@@ -79,7 +80,7 @@ Check what you are about to deploy:
 
 - `cdk diff` lists only additions (`[+]`): 2 functions, 2 log groups, 2 IAM roles with their
   policies, the function URL and its 2 permissions, the topic and subscription, 5 schedules,
-  the alarm and `/spotify-sync/auth-url`.
+  the alarm, `/spotify-sync/auth-url`, and the cache bucket with its bucket policy (HTTPS only).
 - The code package contains exactly 4 files:
 
   ```powershell
@@ -168,7 +169,14 @@ aws sns delete-topic --topic-arn $Topic
 
 # 4f. Only if step 3 found it
 # aws ssm delete-parameter --name /spotify-sync/auth-url
+
+# 4g. The hand-made playlist cache bucket (same name as the stack's). Only a cache: it refills itself.
+aws s3 rb "s3://spotify-sync-cache-$Account-$env:AWS_REGION" --force
 ```
+
+Wait until Spotify's daily playlist quota isn't exhausted before migrating: the first runs after the
+deploy re-read every destination playlist once to refill the cache (All Weeklies is ~75 requests). If
+`/spotify-sync/state/backoff-until` exists and is in the future, migrate after that time.
 
 If `list-attached-role-policies` showed a customer-managed policy (`arn:aws:iam::<account>:policy/...`),
 delete it too after detaching (`aws iam delete-policy --policy-arn ...`); the stack doesn't need it.

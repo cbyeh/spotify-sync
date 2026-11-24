@@ -18,6 +18,7 @@ import os
 
 from aws_cdk import (
     Annotations,
+    Aws,
     CfnOutput,
     Duration,
     RemovalPolicy,
@@ -27,6 +28,7 @@ from aws_cdk import (
     aws_iam as iam,
     aws_lambda as lambda_,
     aws_logs as logs,
+    aws_s3 as s3,
     aws_scheduler as scheduler,
     aws_sns as sns,
     aws_sns_subscriptions as subs,
@@ -94,6 +96,19 @@ class SpotifySyncStack(Stack):
         # renewal reminders (auth) and "couldn't copy Discover Weekly this week" emails (sync)
         topic.grant_publish(lambda_role)
 
+        # --- playlist cache: each destination's snapshot_id + track URIs, so cold starts and the daily
+        #     full check don't re-read big playlists (that's what exhausts Spotify's daily quota).
+        #     Only a cache: safe to lose, so it's retained on `cdk destroy` simply to avoid surprises.
+        cache_bucket = s3.Bucket(
+            self, "PlaylistCache", bucket_name=f"spotify-sync-cache-{Aws.ACCOUNT_ID}-{Aws.REGION}",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            object_ownership=s3.ObjectOwnership.BUCKET_OWNER_ENFORCED,
+            encryption=s3.BucketEncryption.S3_MANAGED, enforce_ssl=True,
+            removal_policy=RemovalPolicy.RETAIN)
+        lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+            resources=[cache_bucket.arn_for_objects("cache/*")]))
+
         def make_function(cid: str, name: str, handler: str, timeout: Duration) -> lambda_.Function:
             log_group = logs.LogGroup(
                 self, f"{cid}Logs", log_group_name=f"/aws/lambda/{name}",
@@ -102,7 +117,8 @@ class SpotifySyncStack(Stack):
                 self, cid, function_name=name,
                 runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
                 handler=handler, code=code, memory_size=128, timeout=timeout, role=lambda_role,
-                environment={"PARAM_PREFIX": prefix, "TOPIC_ARN": topic.topic_arn},
+                environment={"PARAM_PREFIX": prefix, "TOPIC_ARN": topic.topic_arn,
+                             "CACHE_BUCKET": cache_bucket.bucket_name},
                 log_group=log_group)
 
         # 5 minutes: a cold start may have to page through a large archive (~7k tracks ≈ 50 s)
