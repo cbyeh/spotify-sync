@@ -591,8 +591,8 @@ def is_playback_job(job: dict) -> bool:
 def run_playback_job(sp: Spotify, job: dict, dry_run: bool, state=None,
                      final: bool = False, notify=None) -> int:
     """Copy a playlist the API can't read (e.g. Discover Weekly) by briefly playing it.
-    Runs at most once per week: retried until it adds something new (the playlist may not have
-    refreshed yet) or until the `final` attempt, which emails you if it never got a chance."""
+    Runs at most once per week. If it can't run (device unavailable, something playing) or finds
+    nothing new yet, a later attempt retries; the `final` attempt emails you if it never got to run."""
     name = job.get("name", "(unnamed)")
     src_id, dest_id = parse_playlist_id(job["from"]), parse_playlist_id(job["to"])
     year, week, _ = dt.datetime.now(dt.timezone.utc).isocalendar()

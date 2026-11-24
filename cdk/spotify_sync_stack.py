@@ -40,9 +40,9 @@ class SpotifySyncStack(Stack):
                  # all schedules below are in `timezone`
                  full_check_schedule: str = "cron(30 3 * * ? *)",     # 3:30 AM daily
                  reminder_schedule: str = "cron(0 9 * * ? *)",        # 9 AM daily renewal check
-                 # via = "playback" jobs: hourly Mon 4 AM - Tue 11 PM local time, final try Tue 11:30 PM
-                 playback_schedule: str = "cron(0 4-23 ? * MON-TUE *)",
-                 playback_final_schedule: str = "cron(30 23 ? * TUE *)",
+                 # via = "playback" jobs: Monday 4 AM, one retry at 5 AM that emails if it couldn't run
+                 playback_schedule: str = "cron(0 4 ? * MON *)",
+                 playback_final_schedule: str = "cron(0 5 ? * MON *)",
                  timezone: str = "America/Los_Angeles",
                  **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)

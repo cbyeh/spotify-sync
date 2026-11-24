@@ -86,7 +86,7 @@ via  = "playback"
 # device = "My PC"   # optional: a specific Spotify device (default: any computer)
 ```
 
-What happens every Monday from 4 AM (your time zone, `timezone` in `cdk/cdk.json`):
+What happens every Monday at 4 AM (your time zone, `timezone` in `cdk/cdk.json`):
 
 1. It skips the attempt if anything is playing, or if no Spotify **desktop** app is open and idle. Phones are never used,
    because they can't be muted remotely.
@@ -97,9 +97,9 @@ What happens every Monday from 4 AM (your time zone, `timezone` in `cdk/cdk.json
 4. It pauses and restores everything: what was loaded and where, shuffle, repeat, volume and the previously active device.
    Smart Shuffle isn't exposed by the API, so it's left alone.
 
-It retries hourly until it has added this week's songs (Discover Weekly may refresh after 4 AM). If it never found an
-idle desktop app by Tuesday 11:30 PM, it emails you so you can copy the list by hand. Leave the Spotify desktop app open
-and the computer awake on Monday mornings for it to run unattended.
+If it can't run at 4 AM (the device isn't available, or something is playing), it tries once more at 5 AM.
+If that fails too, it emails you so you can copy the list by hand. For the receiver or desktop app to be
+reachable, it needs to stay visible to Spotify: network standby on a receiver, or the app left open on a computer.
 
 Caveats: it needs the playback permissions (`user-read-playback-state`, `user-modify-playback-state`), so existing
 setups must re-approve once. Spotify may treat the brief starts as skips; it's a handful per week, but the effect on

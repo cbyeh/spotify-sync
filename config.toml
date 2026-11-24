@@ -49,8 +49,8 @@ only_from = "37i9dQZEVXcFznARRTnOdi"   # your Discover Weekly (Share > Copy link
 to   = "41JXOe9PZ9g6v2PUW687l6"        # All Weeklies
 mode = "archive"
 
-# The FULL Discover Weekly list, including songs you never play. Opt-in: every Monday from 4 AM
-# (Pacific) it briefly plays Discover Weekly, muted, to read it, then restores shuffle, repeat,
+# The FULL Discover Weekly list, including songs you never play. Opt-in: Monday 4 AM (retry 5 AM,
+# then an email) it briefly plays Discover Weekly, muted, to read it, then restores shuffle, repeat,
 # volume and what you had loaded. Uses the Yamaha receiver (Spotify Connect, network standby on).
 [[sync]]
 name = "Discover Weekly full list -> All Weeklies"
