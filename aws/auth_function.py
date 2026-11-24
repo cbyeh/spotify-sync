@@ -61,8 +61,9 @@ def put_param(name: str, value: str, secure: bool = False) -> None:
 # --------------------------------------------------------------------------- helpers
 
 def base_url(event: dict | None = None) -> str:
-    """Public URL of this function. deploy.ps1 sets AUTH_BASE_URL; under CDK the function can't
-    reference its own URL, so it comes from the request itself or the <prefix>/auth-url parameter."""
+    """Public URL of this function. A hand-built deployment may set AUTH_BASE_URL; under CDK the
+    function can't reference its own URL, so it comes from the request itself or the
+    <prefix>/auth-url parameter (written by the stack)."""
     url = os.environ.get("AUTH_BASE_URL") or _cache.get("base")
     if not url:
         domain = ((event or {}).get("requestContext") or {}).get("domainName")
@@ -179,7 +180,8 @@ def remind() -> dict:
     if "last-reminded" in p and (now - dt.datetime.fromisoformat(p["last-reminded"])).days < REMIND_EVERY_DAYS:
         return {"reminded": False}
     if not TOPIC_ARN:
-        print("::warning::Token needs renewal but no TOPIC_ARN is set; re-deploy with -AlertEmail.")
+        print("::warning::Token needs renewal but no TOPIC_ARN is set; "
+              "run `cdk deploy -c alertEmail=you@example.com` from cdk/.")
         return {"reminded": False}
 
     expires = issued + dt.timedelta(days=182)
