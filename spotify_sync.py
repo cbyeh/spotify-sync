@@ -42,6 +42,7 @@ import webbrowser
 from typing import Iterator
 
 API = "https://api.spotify.com/v1"
+FULL_REFRESH_SECONDS = 7 * 24 * 3600   # re-read a cached playlist fully at least weekly
 AUTH_URL = "https://accounts.spotify.com/authorize"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 DEFAULT_REDIRECT = "http://127.0.0.1:8888/callback"
@@ -65,6 +66,14 @@ MADE_FOR_YOU_HINT = (
 
 class SpotifyError(Exception):
     pass
+
+
+class QuotaExceeded(SpotifyError):
+    """Spotify's quota for this developer account is used up; retry_after is in seconds."""
+
+    def __init__(self, message: str, retry_after: int):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 # --------------------------------------------------------------------------- helpers
@@ -129,9 +138,11 @@ class Spotify:
         self.token = access_token
         self.expires_at = time.time() + expires_in - 120   # refresh a bit early
         self._recent: list[dict] | None = None
-        # playlist id -> (snapshot_id, track uris). Survives between runs while the session is
-        # reused, so a big destination is only re-read when the playlist actually changed.
-        self._playlists: dict[str, tuple[str, list[str]]] = {}
+        # playlist id -> (snapshot_id, track uris, time of last full read). Survives between runs while
+        # the session is reused; with a `store` (e.g. S3) it also survives cold starts, so a big
+        # destination is only re-read when something outside this tool changed it.
+        self._playlists: dict[str, tuple[str, list[str], float]] = {}
+        self.store = None   # optional: object with get(pid) -> dict | None, put(pid, dict), delete(pid)
 
     @property
     def expired(self) -> bool:
@@ -175,7 +186,11 @@ class Spotify:
                     return {}   # some player commands answer with a non-JSON body
             except urllib.error.HTTPError as e:
                 if e.code == 429 or e.code >= 500:
-                    wait = int(e.headers.get("Retry-After", 2 ** attempt))
+                    wait = int(e.headers.get("Retry-After", 2 ** attempt) or 1)
+                    if e.code == 429 and wait > 120:
+                        # A quota reset hours away, not a brief rate limit: retrying now only burns time.
+                        raise QuotaExceeded(f"{method} {url} -> 429 quota exceeded; resets in "
+                                            f"{wait // 3600}h{wait % 3600 // 60:02d}m", wait) from None
                     time.sleep(min(wait, 60))
                     continue
                 detail = e.read().decode(errors="replace")
@@ -193,25 +208,55 @@ class Spotify:
     def playlist_snapshot(self, playlist_id: str) -> str | None:
         return self.request("GET", f"/playlists/{playlist_id}?fields=snapshot_id").get("snapshot_id")
 
+    def _cached(self, playlist_id: str) -> tuple | None:
+        cache = self._playlists
+        if playlist_id not in cache and getattr(self, "store", None) is not None:
+            try:
+                entry = self.store.get(playlist_id)
+            except Exception as e:   # the cache is an optimization; never fail a run over it
+                print(f"::warning::playlist cache read failed for {playlist_id}: {e}")
+                entry = None
+            if entry and entry.get("snapshot"):
+                cache[playlist_id] = (entry["snapshot"], list(entry.get("uris", [])),
+                                      float(entry.get("full_read_at", 0)))
+        return cache.get(playlist_id)
+
     def playlist_uris(self, playlist_id: str) -> list[str]:
+        """Track URIs of a playlist we own. Uses the cached copy while Spotify's snapshot_id is
+        unchanged (re-reading every page only when the playlist was modified elsewhere, or at
+        least once every FULL_REFRESH_SECONDS as a safety net)."""
         cache = getattr(self, "_playlists", None)
-        snapshot = self.playlist_snapshot(playlist_id) if cache is not None else None
-        if snapshot and cache.get(playlist_id, ("",))[0] == snapshot:
-            return list(cache[playlist_id][1])
+        if cache is None:   # minimal clients (tests) without caching
+            return [u for page in self.pages(f"/playlists/{playlist_id}/items?limit=100&additional_types=track")
+                    for u in map(track_uri, page) if u]
+        snapshot = self.playlist_snapshot(playlist_id)
+        hit = self._cached(playlist_id)
+        if snapshot and hit and hit[0] == snapshot and time.time() - hit[2] < FULL_REFRESH_SECONDS:
+            return list(hit[1])
         uris = []
         for page in self.pages(f"/playlists/{playlist_id}/items?limit=100&additional_types=track"):
             uris += [u for u in map(track_uri, page) if u]
-        if snapshot:
-            cache[playlist_id] = (snapshot, uris)
+        self._remember(playlist_id, snapshot, uris, full_read=True)
         return list(uris)
 
-    def _remember(self, playlist_id: str, snapshot: str | None, uris: list[str]) -> None:
+    def _remember(self, playlist_id: str, snapshot: str | None, uris: list[str],
+                  full_read: bool = False) -> None:
         cache = getattr(self, "_playlists", None)
-        if cache is not None:
-            if snapshot:
-                cache[playlist_id] = (snapshot, list(uris))
-            else:
+        if cache is None:
+            return
+        store = getattr(self, "store", None)
+        try:
+            if not snapshot:
                 cache.pop(playlist_id, None)
+                if store is not None:
+                    store.delete(playlist_id)
+                return
+            read_at = time.time() if full_read else cache.get(playlist_id, (None, None, 0.0))[2]
+            cache[playlist_id] = (snapshot, list(uris), read_at)
+            if store is not None:
+                store.put(playlist_id, {"snapshot": snapshot, "uris": list(uris), "full_read_at": read_at})
+        except Exception as e:
+            print(f"::warning::playlist cache write failed for {playlist_id}: {e}")
 
     def my_playlists(self) -> Iterator[dict]:
         for page in self.pages("/me/playlists?limit=50"):
@@ -235,7 +280,7 @@ class Spotify:
     # -- writes
     def add_to_playlist(self, playlist_id: str, uris: list[str]) -> None:
         cache = getattr(self, "_playlists", {})
-        known = cache.get(playlist_id, (None, []))[1]
+        known = cache.get(playlist_id, (None, [], 0.0))[1]
         snapshot = None
         for i in range(0, len(uris), 100):
             snapshot = self.request("POST", f"/playlists/{playlist_id}/items",
@@ -721,6 +766,8 @@ def run_all(config_path: str, dry_run: bool = False, on_new_refresh_token=None,
                 run_playback_job(sp, job, dry_run, state, final, notify)
             else:
                 run_job(sp, job, dry_run, state, full)
+        except QuotaExceeded:
+            raise   # the whole run should stop and back off, not just this job
         except (SpotifyError, ValueError) as e:
             msg = f"[{job.get('name', '(unnamed)')}] {e}"
             errors.append(msg)
