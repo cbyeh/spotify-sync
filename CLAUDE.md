@@ -13,20 +13,24 @@ work on it safely.
 - `aws/auth_function.py`: the approval/renewal Lambda behind a public function URL (`/start?k=<link key>`,
   `/callback`, daily `{"action":"remind"}`, `{"action":"link"}`).
 - `cdk/`: Python CDK app describing the same infrastructure. **Never synthesized or deployed yet** (see below).
-- `tests/`: dependency-free tests using fakes. Run `python tests/test_sync_logic.py` and `python tests/test_playback.py`.
+- `tests/`: dependency-free tests using fakes. Run `python tests/test_sync_logic.py`, `python tests/test_playback.py`
+  and `python tests/test_cache.py`.
 - `.github/workflows/sync.yml`: alternative hourly runner on GitHub Actions. It skips when secrets aren't set,
   which they aren't for the owner.
 
 ## Live deployment (built by hand, not CDK)
 
 All in us-west-2:
-- Lambdas `spotify-sync` (python3.13, arm64, 128 MB, 300 s; env `PARAM_PREFIX`, `TOPIC_ARN`) and `spotify-sync-auth`
+- Lambdas `spotify-sync` (python3.13, arm64, 128 MB, 300 s; env `PARAM_PREFIX`, `TOPIC_ARN`, `CACHE_BUCKET`) and `spotify-sync-auth`
   (120 s; env `PARAM_PREFIX`, `TOPIC_ARN`, `AUTH_BASE_URL`). Both use role `spotify-sync-lambda`.
 - Schedules (EventBridge Scheduler, role `spotify-sync-scheduler`, timezone America/Los_Angeles):
   `spotify-sync` rate(1 minute) · `spotify-sync-full` 3:30 AM daily `{"full":true}` · `spotify-sync-reminder` 9 AM daily
   → auth `{"action":"remind"}` · `spotify-sync-playback` Mon 4 AM `{"playback":true}` ·
   `spotify-sync-playback-final` Mon 5 AM `{"playback":true,"final":true}`.
 - SNS topic `spotify-sync-alerts` (email subscription confirmed), alarm `spotify-sync-failing`, 14-day log groups.
+- S3 bucket `spotify-sync-cache-<account-id>-us-west-2` (private, Block Public Access, SSE-S3): `cache/<playlist>.json.gz`
+  holds each destination's snapshot_id + track URIs, so cold starts and the daily full check don't re-read big playlists.
+  It's safe to delete (it's only a cache); the role may only Get/Put/Delete `cache/*`.
 - SSM `/spotify-sync/*`: `client-id`, `client-secret`, `refresh-token`, `refresh-token-issued`, `link-key`, `user-id`,
   `last-reminded` (SecureString or String), and `state/*`. **These are the only copy of the secrets. Never delete or
   print them.**
@@ -86,9 +90,9 @@ tracks, then restores the player. Hard-won rules, each covered by tests in `test
    Check it worked.
 
 1. Review and merge the `cdk-parity` PR, then do the migration (above).
-2. **Reduce playlist reads**: the destination cache (snapshot_id → track URIs) only lives in a warm Lambda, so every
-   cold start re-reads All Weeklies (75 pages). Persist it, e.g. as an S3 object (free tier) keyed by playlist and
-   snapshot_id, updated from our own adds' snapshot_id. That's the main fix for the quota problem.
+2. ~~Reduce playlist reads~~: **done** (S3 cache above; a playlist is re-read only when its snapshot_id changed or
+   weekly as a safety net). The `cdk-parity` PR still needs the bucket, permissions and `CACHE_BUCKET` env added
+   (see the follow-up commit on that branch), and MIGRATION.md must keep the bucket.
 3. Check All Weeklies (`41JXOe9PZ9g6v2PUW687l6`) for **pre-existing duplicates** from before this tool. The sync itself
    never adds one (it dedupes by track URI against the whole playlist), but the first scan attempt hit a 429.
    Re-run slowly, report exact-URI duplicates and same-name/artist pairs, and ask the owner before removing anything.

@@ -12,6 +12,8 @@ or {"dry_run": true} to see what would change. {"playback": true} runs only the 
 jobs (weekly schedule); add "final": true on the last attempt so you get an email if it never ran.
 """
 import datetime as dt
+import gzip
+import json
 import os
 
 import boto3
@@ -23,6 +25,7 @@ LOCK = f"{PREFIX}/lock"
 BACKOFF = f"{PREFIX}/state/backoff-until"   # set when Spotify reports QUOTA_EXCEEDED
 LOCK_STALE_SECONDS = 360   # longer than the 5-minute function timeout
 TOPIC_ARN = os.environ.get("TOPIC_ARN", "")
+CACHE_BUCKET = os.environ.get("CACHE_BUCKET", "")   # private bucket for playlist contents (optional)
 ssm = boto3.client("ssm")
 
 _session: spotify_sync.Spotify | None = None   # reused across warm invocations until the token expires
@@ -68,6 +71,33 @@ class SsmState:
             self.values[key] = value
 
 
+class S3PlaylistCache:
+    """Destination playlist contents (snapshot_id + track URIs) persisted across cold starts, so
+    big playlists aren't re-read from Spotify (that's what exhausts the daily quota)."""
+
+    def __init__(self, bucket: str):
+        self.s3 = boto3.client("s3")
+        self.bucket = bucket
+
+    def _key(self, playlist_id: str) -> str:
+        return f"cache/{playlist_id}.json.gz"
+
+    def get(self, playlist_id: str) -> dict | None:
+        try:
+            body = self.s3.get_object(Bucket=self.bucket, Key=self._key(playlist_id))["Body"].read()
+        except self.s3.exceptions.NoSuchKey:
+            return None
+        return json.loads(gzip.decompress(body))
+
+    def put(self, playlist_id: str, entry: dict) -> None:
+        self.s3.put_object(Bucket=self.bucket, Key=self._key(playlist_id),
+                           Body=gzip.compress(json.dumps(entry).encode()),
+                           ContentType="application/json", ContentEncoding="gzip")
+
+    def delete(self, playlist_id: str) -> None:
+        self.s3.delete_object(Bucket=self.bucket, Key=self._key(playlist_id))
+
+
 def _acquire_lock() -> bool:
     """Stop two overlapping runs from adding the same tracks twice."""
     now = dt.datetime.now(dt.timezone.utc)
@@ -111,12 +141,7 @@ def handler(event, context):
     playback = bool(event.get("playback", False))
     final = bool(event.get("final", False))
 
-    if _session is None or _session.expired:
-        if not _load_secrets():
-            print("Waiting for first Spotify approval; skipping.")
-            return {"ok": True, "skipped": "not approved yet"}
-        _session = spotify_sync.Spotify.from_env(on_new_refresh_token=_save_refresh_token)
-
+    # Paused after QUOTA_EXCEEDED: don't contact Spotify at all until the reset.
     try:
         until = dt.datetime.fromisoformat(ssm.get_parameter(Name=BACKOFF)["Parameter"]["Value"])
         if dt.datetime.now(dt.timezone.utc) < until:
@@ -124,6 +149,15 @@ def handler(event, context):
             return {"ok": True, "skipped": "quota", "until": until.isoformat()}
     except ssm.exceptions.ParameterNotFound:
         pass
+
+    if _session is None or _session.expired:
+        if not _load_secrets():
+            print("Waiting for first Spotify approval; skipping.")
+            return {"ok": True, "skipped": "not approved yet"}
+        _session = spotify_sync.Spotify.from_env(on_new_refresh_token=_save_refresh_token)
+
+    if CACHE_BUCKET and getattr(_session, "store", None) is None:
+        _session.store = S3PlaylistCache(CACHE_BUCKET)
 
     if not _acquire_lock():
         print("Previous run still in progress; skipping.")
@@ -145,6 +179,8 @@ def handler(event, context):
             if not _load_secrets():
                 return {"ok": True, "skipped": "not approved"}
             _session = spotify_sync.Spotify.from_env(on_new_refresh_token=_save_refresh_token)
+            if CACHE_BUCKET:
+                _session.store = S3PlaylistCache(CACHE_BUCKET)
             errors = run()
     finally:
         _release_lock()

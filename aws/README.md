@@ -7,6 +7,10 @@ The whole AWS setup is one CDK stack (`cdk/`). It contains:
 - **`spotify-sync-auth`**: a Lambda with a public URL that handles Spotify approval, plus a daily check that emails you a one-tap renewal link before Spotify's 6-month token expiry.
 - An SNS email topic, a failure alarm, two IAM roles with minimal permissions, and logs kept for 14 days.
 
+A small private S3 bucket caches the contents of your destination playlists (by Spotify snapshot ID), so big
+playlists aren't re-read on every Lambda cold start. Spotify's Development Mode has a daily quota, and re-reading
+a 7,500-song playlist is what exhausts it.
+
 Your secrets live in SSM Parameter Store, **outside** the stack. Deleting or redeploying the stack never touches them.
 
 | Piece | Usage per month | Free allowance | Cost |
