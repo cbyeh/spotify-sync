@@ -108,6 +108,10 @@ class SpotifySyncStack(Stack):
         lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
             resources=[cache_bucket.arn_for_objects("cache/*")]))
+        # Without ListBucket, S3 answers a missing key with AccessDenied instead of NoSuchKey.
+        lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["s3:ListBucket"], resources=[cache_bucket.bucket_arn],
+            conditions={"StringLike": {"s3:prefix": ["cache/*"]}}))
 
         def make_function(cid: str, name: str, handler: str, timeout: Duration) -> lambda_.Function:
             log_group = logs.LogGroup(
