@@ -91,8 +91,8 @@ tracks, then restores the player. Hard-won rules, each covered by tests in `test
 
 1. Review and merge the `cdk-parity` PR, then do the migration (above).
 2. ~~Reduce playlist reads~~: **done** (S3 cache above; a playlist is re-read only when its snapshot_id changed or
-   weekly as a safety net). The `cdk-parity` PR still needs the bucket, permissions and `CACHE_BUCKET` env added
-   (see the follow-up commit on that branch), and MIGRATION.md must keep the bucket.
+   weekly as a safety net). The `cdk-parity` PR includes the bucket, its permissions and `CACHE_BUCKET`;
+   MIGRATION.md step 4g deletes the hand-made bucket (cache only) so the stack can recreate it.
 3. Check All Weeklies (`41JXOe9PZ9g6v2PUW687l6`) for **pre-existing duplicates** from before this tool. The sync itself
    never adds one (it dedupes by track URI against the whole playlist), but the first scan attempt hit a 429.
    Re-run slowly, report exact-URI duplicates and same-name/artist pairs, and ask the owner before removing anything.
