@@ -297,6 +297,14 @@ def read_by_playback(sp: "Spotify", playlist_id: str, device_name: str | None = 
     ctx = f"spotify:playlist:{playlist_id}"
     before = sp.request("GET", "/me/player") or {}
     if before.get("is_playing"):
+        # Spotify sometimes reports "playing" for a client that stopped syncing (position frozen).
+        # Either way, don't act: real playback mustn't be interrupted, and stale state can't be
+        # trusted for restoring settings.
+        SLEEP(2.5)
+        again = sp.request("GET", "/me/player") or {}
+        if again.get("is_playing") and again.get("progress_ms") == before.get("progress_ms"):
+            raise PlaybackUnavailable("Spotify reports playback but the position isn't moving: the player's "
+                                      "state looks out of sync (press play/pause in the app to resync)")
         raise PlaybackUnavailable("something is playing right now")
     devices = sp.request("GET", "/me/player/devices").get("devices", [])
     device = next((d for d in devices if not d.get("is_restricted") and (
