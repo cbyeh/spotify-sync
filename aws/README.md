@@ -8,6 +8,11 @@ The whole AWS setup is one CDK stack (`cdk/`). It contains:
 - An SNS email topic, a failure alarm, two IAM roles with minimal permissions, and logs kept for 14 days.
 
 Your secrets live in SSM Parameter Store, **outside** the stack. Deleting or redeploying the stack never touches them.
+The only parameter the stack owns is `/spotify-sync/auth-url` (the approval function's public URL, which the function reads
+for reminder emails).
+
+**Already running a hand-built deployment** (created with the AWS CLI or the old `deploy.ps1`)? The stack uses the same
+resource names, so follow [cdk/MIGRATION.md](../cdk/MIGRATION.md) instead of the setup below. It keeps your Spotify approval.
 
 | Piece | Usage per month | Free allowance | Cost |
 |---|---|---|---|
@@ -21,7 +26,7 @@ Your secrets live in SSM Parameter Store, **outside** the stack. Deleting or red
 ## Prerequisites (once per computer)
 
 - [Node.js](https://nodejs.org/) (LTS), Python 3.11+ and [AWS CLI v2](https://aws.amazon.com/cli/), already signed in (`aws sts get-caller-identity` works)
-- CDK CLI: `npm install -g aws-cdk`
+- CDK CLI: `npm install -g aws-cdk`. The Python side (`aws-cdk-lib` 2.220 or later) is installed from `cdk/requirements.txt` below.
 
 ## Setup
 
@@ -44,8 +49,9 @@ aws ssm put-parameter --name /spotify-sync/client-secret --type SecureString --v
 cd cdk
 python -m venv .venv; .\.venv\Scripts\Activate.ps1      # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
-$env:CDK_DEFAULT_REGION = "us-west-2"
+$env:AWS_REGION = "us-west-2"; $env:CDK_DEFAULT_REGION = "us-west-2"
 cdk bootstrap                                            # once per AWS account + region
+cdk diff   -c alertEmail=you@example.com                 # optional: see what will be created
 cdk deploy -c alertEmail=you@example.com
 ```
 
@@ -91,6 +97,9 @@ To read past runs: `aws logs tail /aws/lambda/spotify-sync --since 1d`.
 
 ## Update / remove
 
-- **Update:** edit `config.toml` or pull new code, then run `cdk deploy` again from `cdk/`.
-- **Remove:** run `cdk destroy`. This removes everything except your SSM secrets. To delete those too:
+- **Update:** edit `config.toml` or pull new code, then run `cdk deploy -c alertEmail=you@example.com` again from `cdk/`
+  (always pass the same `alertEmail`; without it the email subscription is removed).
+  The code package contains only `spotify_sync.py`, `config.toml` and `aws/*.py`.
+- **Remove:** run `cdk destroy`. This removes everything except your SSM secrets and sync state. To delete those too:
   `aws ssm delete-parameters --names /spotify-sync/client-id /spotify-sync/client-secret /spotify-sync/refresh-token /spotify-sync/refresh-token-issued /spotify-sync/link-key /spotify-sync/user-id /spotify-sync/last-reminded`
+  and the change markers: `aws ssm get-parameters-by-path --path /spotify-sync/state --query "Parameters[].Name" --output text`, then `aws ssm delete-parameters --names <those names>`.
