@@ -47,6 +47,8 @@ r=FR([5,3,9],[3]); s.run_job(r,{"from":"recent","to":D},False); assert r.added==
 print("recent ok")
 # --- mode option
 r=FR([5,3,9],[3]); s.run_job(r,{"from":"recent","to":D,"mode":"archive"},False); assert r.added==["spotify:track:9","spotify:track:5"]
+# same song played twice before a run (e.g. after downtime): archived once, at its first play
+r=FR([5,3,5,9,5],[3]); s.run_job(r,{"from":"recent","to":D,"mode":"archive"},False); assert r.added==["spotify:track:5","spotify:track:9"], r.added
 r=FR([5,3],[1]); s.run_job(r,{"from":"recent","to":D,"mode":"rolling"},False); assert r.replaced==["spotify:track:5","spotify:track:3","spotify:track:1"]
 r=FR([5,3,9],[1]); s.run_job(r,{"from":"recent","to":D,"mode":"rolling","keep":2},False); assert r.replaced==["spotify:track:5","spotify:track:3"]
 for bad in [{"mode":"nope"},{"mode":"archive","keep":5}]:
