@@ -15,23 +15,30 @@ work on it safely.
 - `cdk/`: TypeScript CDK app (`app.ts`, `spotify-sync-stack.ts`; `npm ci`, then `cdk ...` or `npx cdk ...`) describing
   the same infrastructure. Ported from Python on Nov 24; all 5 synth modes (default, no alertEmail, smoke, importCache,
   importCache+smoke) gave templates identical to the Python app's, logical IDs and asset hash included.
-  Smoke-tested (MIGRATION.md 2b) but the live stack isn't deployed yet (see below).
+  **This is the live deployment** (stack `SpotifySync`, since Nov 24 2026). Change things with `cdk deploy` only.
 - `aws/spend_cap_function.py`: account-wide spend-cap kill switch (see "Spend cap" below). Not part of the CDK stack.
 - `tests/`: dependency-free tests using fakes. Run `python tests/test_sync_logic.py`, `python tests/test_playback.py`,
   `python tests/test_cache.py` and `python tests/test_spend_cap.py`.
 - `.github/workflows/sync.yml`: alternative hourly runner on GitHub Actions. It skips when secrets aren't set,
   which they aren't for the owner.
 
-## Live deployment (built by hand, not CDK)
+## Live deployment (CDK stack `SpotifySync`)
 
-All in us-west-2:
+Migrated from the hand-built setup on Tue Nov 24 2026, 5:02–5:07 PM PT (sync down ~5 minutes), following
+cdk/MIGRATION.md with the cache bucket adopted by `cdk import` (step 3b). The hand-built backup is in
+`~/spotify-sync-backup` on the owner's Windows machine (outside the repo). Deploy from `cdk/`:
+`cdk deploy -c alertEmail=<the owner's address, see the backup's topic-subscriptions.json>`; **always pass the same
+alertEmail**, or the subscription is removed. Use `-c schedules=off` + a manual `{"dry_run": true}` before switching
+the schedules back on after risky changes. The CDK account is bootstrapped (`CDKToolkit`). All in us-west-2:
 - Lambdas `spotify-sync` (python3.13, arm64, 128 MB, 300 s; env `PARAM_PREFIX`, `TOPIC_ARN`, `CACHE_BUCKET`) and `spotify-sync-auth`
-  (120 s; env `PARAM_PREFIX`, `TOPIC_ARN`, `AUTH_BASE_URL`). Both use role `spotify-sync-lambda`.
+  (120 s; same env). Both use role `spotify-sync-lambda`. Handlers `aws.lambda_function.handler` / `aws.auth_function.handler`.
+  `spotify-sync-auth` reads its public URL from the stack-owned `/spotify-sync/auth-url` (no `AUTH_BASE_URL` any more).
 - Schedules (EventBridge Scheduler, role `spotify-sync-scheduler`, timezone America/Los_Angeles):
   `spotify-sync` rate(1 minute) · `spotify-sync-full` 3:30 AM daily `{"full":true}` · `spotify-sync-reminder` 9 AM daily
   → auth `{"action":"remind"}` · `spotify-sync-playback` Mon 4 AM `{"playback":true}` ·
   `spotify-sync-playback-final` Mon 5 AM `{"playback":true,"final":true}`.
-- SNS topic `spotify-sync-alerts` (email subscription confirmed), alarm `spotify-sync-failing`, 14-day log groups.
+- SNS topic `spotify-sync-alerts` (recreated by the stack: the owner must re-confirm the email subscription),
+  alarm `spotify-sync-failing`, 14-day log groups (the pre-migration logs were deleted with the old groups).
 - S3 bucket `spotify-sync-cache-<account-id>-us-west-2` (private, Block Public Access, SSE-S3): `cache/<playlist>.json.gz`
   holds each destination's snapshot_id + track URIs, so cold starts and the daily full check don't re-read big playlists.
   It's safe to delete (it's only a cache). The role may only Get/Put/Delete `cache/*`, plus ListBucket limited to the
@@ -48,24 +55,10 @@ All in us-west-2:
   `spend-cap` topic to test it: any SNS message is a real freeze.** The CDK migration deletes and recreates the
   spotify-sync schedules/Lambdas; the kill switch lists them at freeze time, so no change is needed there. The older
   `My Monthly Cost Budget` ($3, email-only) is the owner's and was left as is.
-- How the live code got deployed: the cloud session couldn't upload zips, so a temporary CloudFormation-inline
-  "builder" Lambda downloaded a pinned GitHub commit and called UpdateFunctionCode. Locally you can just
-  zip `spotify_sync.py config.toml aws/lambda_function.py aws/auth_function.py` **flat** (no folders) and run
-  `aws lambda update-function-code --function-name spotify-sync --zip-file fileb://function.zip`
-  (same zip for `spotify-sync-auth`). Handlers: `lambda_function.handler` / `auth_function.handler`.
-
-## Next task: move the live deployment onto CDK
-
-PR #1 (`cdk-parity`: the stack matched to the live setup above, plus `cdk/MIGRATION.md`) is **merged into main**.
-On the owner's machine (Windows, PowerShell): `cdk synth` → `cdk diff` → **smoke test** (MIGRATION.md step 2b:
-`cdk deploy -c smoke=true` makes a separate `-smoke` copy with dummy credentials and disabled schedules, checks
-it, then destroys it) → follow the rest of MIGRATION.md. The stack has never been synthesized for real yet: the
-`name`/`schedules_enabled` parameters were only checked against a stub. Key points:
-- The stack reuses the same physical names, so the hand-built resources must be deleted first, **except SSM**.
-- The CDK asset keeps the repo layout, so handlers are `aws.lambda_function.handler` / `aws.auth_function.handler`.
-- The new function URL means adding the new `/callback` redirect URI in the Spotify developer dashboard.
-  No re-approval is needed, because the refresh token stays in SSM. The owner re-confirms the SNS email.
-- The function URL needs both `lambda:InvokeFunctionUrl` and `lambda:InvokeFunction` (InvokedViaFunctionUrl), required since Oct 2025.
+- Code changes deploy with `cdk deploy` (the code package is `spotify_sync.py`, `config.toml`,
+  `aws/lambda_function.py`, `aws/auth_function.py`; don't use `update-function-code` any more, it would drift).
+- Leftover log groups from earlier helper Lambdas (`/aws/lambda/spotify-sync-builder-tmp`, `-diag-tmp`,
+  `-s3check-tmp`) aren't part of anything; safe to delete when convenient.
 
 ## Spotify API constraints (learned the hard way)
 
@@ -103,7 +96,12 @@ tracks, then restores the player. Hard-won rules, each covered by tests in `test
 
 0. ~~Nov 23 Discover Weekly retry~~: done Tue Nov 24, 2 PM (30 read, 17 new; week marked done).
 
-1. ~~Merge the `cdk-parity` PR~~ (done). Smoke test, then do the migration (above). Not near Monday 4 AM.
+1. ~~CDK migration~~: **done** Nov 24 (above). Dry run and full dry run on the new function were clean (the full
+   one read All Weeklies from the S3 cache in ~3 s), then scheduled runs resumed. **Owner to do:** confirm the new
+   SNS subscription email; add the new `/callback` redirect URI (`SpotifySync.SpotifyRedirectUri` stack output) in
+   the Spotify developer dashboard, then remove the old one; optionally open the new approval link (in the backup
+   folder's `link-out.json`, never commit it) to check it lands on "All set ✅". Until the redirect URI is added,
+   renewal links fail at Spotify; the sync itself is unaffected (the refresh token stays in SSM).
 2. ~~Reduce playlist reads~~: **done** (S3 cache above; a playlist is re-read only when its snapshot_id changed or
    weekly as a safety net). The `cdk-parity` PR includes the bucket, its permissions and `CACHE_BUCKET`;
    MIGRATION.md step 3b adopts the hand-made bucket and its policy with `cdk import -c importCache=true`
