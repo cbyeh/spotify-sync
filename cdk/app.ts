@@ -21,9 +21,13 @@ const importCache = flag(ctx("importCache"));
 // created switched off, and it sends no email. It doesn't touch the live deployment.
 const smoke = flag(ctx("smoke"));
 
+// `-c schedules=off` creates every schedule switched off, so the first run after a deploy can be a
+// manual {"dry_run": true}; deploy again without it to switch them on (MIGRATION.md step 5).
+const schedulesOff = String(ctx("schedules") ?? "").toLowerCase() === "off";
+
 new SpotifySyncStack(app, smoke ? "SpotifySyncSmoke" : "SpotifySync", {
   name: smoke ? "spotify-sync-smoke" : "spotify-sync",
-  schedulesEnabled: !smoke,
+  schedulesEnabled: !smoke && !schedulesOff,
   cacheOnly: importCache,
   alertEmail: smoke ? undefined : ctx("alertEmail"),
   paramPrefix: smoke ? "/spotify-sync-smoke" : (ctx("paramPrefix") ?? "/spotify-sync"),

@@ -284,20 +284,30 @@ Do **not** delete anything else under `/spotify-sync` in SSM.
 
 ## 5. Deploy the stack
 
+First with the schedules switched off, so the first run of the new function is a dry run you start
+yourself; then again without `schedules=off` to switch them on:
+
 ```powershell
 cd cdk
-cdk deploy -c alertEmail=you@example.com
+cdk deploy -c alertEmail=you@example.com -c schedules=off
+cd ..
+'{"dry_run": true}' | Set-Content -Encoding ascii dry.json
+aws lambda invoke --function-name spotify-sync --cli-binary-format raw-in-base64-out --payload file://dry.json --log-type Tail out.json --query LogResult --output text |
+  % { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) }
+Get-Content out.json                    # {"ok": true, ...} and "Would add" lines, no ::error::
+cd cdk
+cdk deploy -c alertEmail=you@example.com    # same stack, schedules ENABLED
 cd ..
 ```
 
 Approve the IAM changes when asked. When it finishes, it prints `SpotifySync.AuthUrl`,
 `SpotifySync.SpotifyRedirectUri` and `SpotifySync.GetApprovalLink`. The every-minute schedule is
-live again as soon as the deploy completes.
+live again as soon as the second deploy completes.
 
-If the deploy fails, CloudFormation rolls back what it created. The usual cause is a name that still
-exists (`... already exists`): delete that resource as in step 4, then run `cdk deploy` again (the CLI
-removes a stack left in `ROLLBACK_COMPLETE` before retrying; `cdk destroy` also works). If you'd rather
-go back to the hand-built setup, see [Roll back](#roll-back).
+If the deploy fails, CloudFormation rolls the stack back to what it held before (after step 3b: the
+cache bucket and its policy). The usual cause is a name that still exists (`... already exists`):
+delete that resource as in step 4, then run `cdk deploy` again. If you'd rather go back to the
+hand-built setup, see [Roll back](#roll-back).
 
 ## 6. After the deploy
 
