@@ -1,5 +1,6 @@
 {
-  "app": "python app.py",
+  "app": "npx ts-node --prefer-ts-exts app.ts",
+  "watch": { "include": ["*.ts"] },
   "context": {
     "region": "us-west-2",
     "alertEmail": "",

@@ -8,3 +8,4 @@ cdk.out/
 out.json
 dry.json
 link-out.json
+node_modules/
