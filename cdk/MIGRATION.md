@@ -352,7 +352,7 @@ aws ssm get-parameters-by-path --path /spotify-sync --recursive --query "Paramet
 cd cdk; cdk diff -c alertEmail=you@example.com; cd ..    # "There were no differences"
 ```
 
-You should see 5 schedules, `ENABLED`, in `America/Los_Angeles`. The log should show runs every minute
+You should see 5 schedules, `ENABLED`, in `America/Los_Angeles`. The log should show runs every 10 minutes
 without `Waiting for first Spotify approval` (that would mean `refresh-token` is missing).
 
 From now on, change things with `cdk deploy` only. Delete `$B` once you no longer need a rollback.

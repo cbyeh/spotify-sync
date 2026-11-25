@@ -25,6 +25,7 @@ Environment variables:
 from __future__ import annotations
 
 import argparse
+import collections
 import base64
 import datetime as dt
 import http.server
@@ -131,6 +132,13 @@ def track_uri(entry: dict) -> str | None:
     return obj.get("uri")
 
 
+def endpoint_name(method: str, url: str) -> str:
+    """'GET /playlists/{id}/items' for usage counts: no host, query string or IDs."""
+    path = urllib.parse.urlsplit(url).path.removeprefix("/v1")
+    path = re.sub(r"/(playlists|albums|tracks|artists|users)/[^/]+", r"/\1/{id}", path)
+    return f"{method} {path}"
+
+
 # --------------------------------------------------------------------------- API client
 
 class Spotify:
@@ -143,6 +151,9 @@ class Spotify:
         # destination is only re-read when something outside this tool changed it.
         self._playlists: dict[str, tuple[str, list[str], float]] = {}
         self.store = None   # optional: object with get(pid) -> dict | None, put(pid, dict), delete(pid)
+        # Web API requests sent, by endpoint (retries included: Spotify counts every one against the
+        # developer account's daily quota). A host can read and reset this to track usage.
+        self.calls: collections.Counter = collections.Counter()
 
     @property
     def expired(self) -> bool:
@@ -173,6 +184,7 @@ class Spotify:
         url = path if path.startswith("http") else API + path
         payload = json.dumps(body).encode() if body is not None else None
         for attempt in range(5):
+            self.calls[endpoint_name(method, url)] += 1
             req = urllib.request.Request(url, data=payload, method=method, headers={
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",

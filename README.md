@@ -1,7 +1,7 @@
 # spotify-sync
 
 A free, self-hosted replacement for IFTTT's Spotify "new track → add to playlist" applets.
-It copies new tracks from a source into a destination playlist: every minute on AWS Lambda, or hourly on GitHub Actions.
+It copies new tracks from a source into a destination playlist: every 10 minutes on AWS Lambda, or hourly on GitHub Actions.
 
 | Source | Works? |
 |---|---|

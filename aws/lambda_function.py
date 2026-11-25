@@ -4,17 +4,21 @@ Secrets come from SSM Parameter Store (SecureString, free tier) under PARAM_PREF
   <prefix>/client-id, <prefix>/client-secret, <prefix>/refresh-token
 If Spotify rotates the refresh token, the new one is written back automatically.
 
-Runs every minute. To stay cheap, each job first asks "anything new?" (newest like / newest
+Runs every 10 minutes (Spotify's Development Mode has a daily request quota). To stay cheap, each job first asks "anything new?" (newest like / newest
 play / playlist snapshot) and compares it with what it saw last time, stored under
 <prefix>/state/. Only when something changed does it read and write playlists.
 Invoke with {"full": true} to ignore that and re-check everything (a daily schedule does this),
 or {"dry_run": true} to see what would change. {"playback": true} runs only the via = "playback"
 jobs (weekly schedule); add "final": true on the last attempt so you get an email if it never ran.
+
+Every run logs how many Spotify Web API requests it sent, plus a running total for the current
+24-hour window (kept in <prefix>/state/api-usage), so the quota's real size can be estimated.
 """
 import datetime as dt
 import gzip
 import json
 import os
+from collections import Counter
 
 import boto3
 
@@ -23,6 +27,8 @@ import spotify_sync
 PREFIX = os.environ.get("PARAM_PREFIX", "/spotify-sync").rstrip("/")
 LOCK = f"{PREFIX}/lock"
 BACKOFF = f"{PREFIX}/state/backoff-until"   # set when Spotify reports QUOTA_EXCEEDED
+USAGE = f"{PREFIX}/state/api-usage"          # Spotify requests in the current 24-hour window
+USAGE_WINDOW = dt.timedelta(hours=24)        # Spotify's quota appears to be a fixed 24 h window
 LOCK_STALE_SECONDS = 360   # longer than the 5-minute function timeout
 TOPIC_ARN = os.environ.get("TOPIC_ARN", "")
 CACHE_BUCKET = os.environ.get("CACHE_BUCKET", "")   # private bucket for playlist contents (optional)
@@ -134,6 +140,39 @@ def _notify(subject: str, message: str) -> None:
         print(f"::warning::{subject} (no TOPIC_ARN set, so no email)")
 
 
+def _summary(by: Counter) -> str:
+    return ", ".join(f"{k} {v}" for k, v in by.most_common())
+
+
+def _record_usage(used: Counter, quota_hit: bool = False) -> None:
+    """Add this run's Spotify requests to the 24-hour window total and log it. Never fails the run."""
+    if not used and not quota_hit:
+        return
+    try:
+        now = dt.datetime.now(dt.timezone.utc)
+        try:
+            w = json.loads(ssm.get_parameter(Name=USAGE)["Parameter"]["Value"])
+        except ssm.exceptions.ParameterNotFound:
+            w = None
+        if not w or now >= dt.datetime.fromisoformat(w["start"]) + USAGE_WINDOW:
+            if w:
+                print(f"Spotify requests in the 24 h window from {w['start'][:16]} UTC: {w['calls']} "
+                      f"({_summary(Counter(w['by']))}).")
+            w = {"start": now.isoformat(timespec="seconds"), "calls": 0, "by": {}}
+        by = Counter(w["by"]) + used
+        w["calls"] += sum(used.values())
+        w["by"] = dict(by)
+        ssm.put_parameter(Name=USAGE, Value=json.dumps(w, separators=(",", ":")), Type="String", Overwrite=True)
+        msg = (f"Spotify requests: {sum(used.values())} this run, {w['calls']} in the window "
+               f"since {w['start'][:16]} UTC")
+        if quota_hit:
+            print(f"::warning::{msg}; quota exhausted at this total ({_summary(by)}).")
+        else:
+            print(msg + ".")
+    except Exception as e:   # usage tracking is diagnostics only
+        print(f"::warning::Couldn't record Spotify usage: {e}")
+
+
 def _config_path() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
     # a flat zip has config.toml next to this file; the CDK asset keeps the repo layout (one level up)
@@ -170,13 +209,20 @@ def handler(event, context):
     if not _acquire_lock():
         print("Previous run still in progress; skipping.")
         return {"ok": True, "skipped": "locked"}
+    used: Counter = Counter()
+    quota_hit = False
     try:
         def run():
-            return spotify_sync.run_all(_config_path(), dry_run, state=SsmState(), full=full, sp=_session,
-                                        playback=playback, final=final, notify=_notify)
+            _session.calls = Counter()
+            try:
+                return spotify_sync.run_all(_config_path(), dry_run, state=SsmState(), full=full, sp=_session,
+                                            playback=playback, final=final, notify=_notify)
+            finally:
+                used.update(_session.calls)
         try:
             errors = run()
         except spotify_sync.QuotaExceeded as q:
+            quota_hit = True
             until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=q.retry_after + 60)
             ssm.put_parameter(Name=BACKOFF, Value=until.isoformat(), Type="String", Overwrite=True)
             print(f"::warning::{q}. Pausing all runs until {until:%Y-%m-%d %H:%M} UTC.")
@@ -192,6 +238,7 @@ def handler(event, context):
             errors = run()
     finally:
         _release_lock()
+        _record_usage(used, quota_hit)
     if errors:
         _session = None   # start fresh next time (e.g. if the token was revoked)
         # Raising marks the invocation as failed, which feeds the error alarm.

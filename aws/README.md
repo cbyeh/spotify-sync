@@ -2,8 +2,11 @@
 
 The whole AWS setup is one CDK stack (`cdk/`). It contains:
 
-- **`spotify-sync`**: a Lambda that syncs **every minute**, triggered by EventBridge Scheduler. Each run first asks Spotify "anything new?"
+- **`spotify-sync`**: a Lambda that syncs **every 10 minutes**, triggered by EventBridge Scheduler. Each run first asks Spotify "anything new?"
   (1–2 small calls, about a second) and only reads or writes playlists when something changed. A daily full check re-verifies everything.
+  Why not every minute: Spotify's Development Mode has an unpublished daily request quota (it ran out after
+  roughly 400–1,000 requests in a day), and every minute is ~2,900 requests a day. Every 10 minutes is ~290. Each run
+  logs its request count and the 24-hour total, so you can see how close you are. Change it with `-c syncSchedule=...`.
 - **`spotify-sync-auth`**: a Lambda with a public URL that handles Spotify approval, plus a daily check that emails you a one-tap renewal link before Spotify's 6-month token expiry.
 - An SNS email topic, a failure alarm, two IAM roles with minimal permissions, and logs kept for 14 days.
 
@@ -20,9 +23,9 @@ resource names, so follow [cdk/MIGRATION.md](../cdk/MIGRATION.md) instead of the
 
 | Piece | Usage per month | Free allowance | Cost |
 |---|---|---|---|
-| Lambda (2 functions, 128 MB, arm64) | ~44k runs, ~6k GB-s | 1M requests, 400k GB-s | $0 |
-| EventBridge Scheduler | ~44k invocations | 14M invocations | $0 |
-| SSM Parameter Store (standard) | ~12 parameters, ~130k API calls | standard tier is free | $0 |
+| Lambda (2 functions, 128 MB, arm64) | ~4.5k runs, ~1k GB-s | 1M requests, 400k GB-s | $0 |
+| EventBridge Scheduler | ~4.5k invocations | 14M invocations | $0 |
+| SSM Parameter Store (standard) | ~13 parameters, ~20k API calls | standard tier is free | $0 |
 | CloudWatch Logs (14-day retention) | ~15 MB | 5 GB | $0 |
 | SNS email + 1 CloudWatch alarm | a few emails | 1k emails, 10 alarms | $0 |
 | CDK bootstrap bucket (S3) | a few KB of code packages | – | ~$0 |

@@ -18,7 +18,7 @@ work on it safely.
   **This is the live deployment** (stack `SpotifySync`, since Nov 24 2026). Change things with `cdk deploy` only.
 - `aws/spend_cap_function.py`: account-wide spend-cap kill switch (see "Spend cap" below). Not part of the CDK stack.
 - `tests/`: dependency-free tests using fakes. Run `python tests/test_sync_logic.py`, `python tests/test_playback.py`,
-  `python tests/test_cache.py`, `python tests/test_auth.py` and `python tests/test_spend_cap.py`.
+  `python tests/test_cache.py`, `python tests/test_auth.py`, `python tests/test_usage.py` and `python tests/test_spend_cap.py`.
 - `.github/workflows/sync.yml`: alternative hourly runner on GitHub Actions. It skips when secrets aren't set,
   which they aren't for the owner.
 
@@ -34,7 +34,7 @@ the schedules back on after risky changes. The CDK account is bootstrapped (`CDK
   (120 s; same env). Both use role `spotify-sync-lambda`. Handlers `aws.lambda_function.handler` / `aws.auth_function.handler`.
   `spotify-sync-auth` reads its public URL from the stack-owned `/spotify-sync/auth-url` (no `AUTH_BASE_URL` any more).
 - Schedules (EventBridge Scheduler, role `spotify-sync-scheduler`, timezone America/Los_Angeles):
-  `spotify-sync` rate(1 minute) · `spotify-sync-full` 3:30 AM daily `{"full":true}` · `spotify-sync-reminder` 9 AM daily
+  `spotify-sync` rate(10 minutes) · `spotify-sync-full` 3:30 AM daily `{"full":true}` · `spotify-sync-reminder` 9 AM daily
   → auth `{"action":"remind"}` · `spotify-sync-playback` Mon 4 AM `{"playback":true}` ·
   `spotify-sync-playback-final` Mon 5 AM `{"playback":true,"final":true}`.
 - SNS topic `spotify-sync-alerts` (recreated by the stack: the owner must re-confirm the email subscription),
@@ -109,11 +109,15 @@ tracks, then restores the player. Hard-won rules, each covered by tests in `test
 3. **Pre-existing duplicates** (from IFTTT, found Nov 24 from the S3 cache, no Spotify reads): All Weeklies has 154
    extra copies of 132 tracks (latest at position 5050 of 7532), Liked Songs backup 19. None came from this tool.
    The owner was offered removal (keep first occurrence) and hasn't decided: ask before removing anything.
-3a. **Quota hit again Tue Nov 24, 7:35 PM PT** (`/me/tracks?limit=1` -> 429, reset ~17h; sync paused until
-   Nov 25 12:58 PM PT by its backoff). The owner's first approval-link attempt then failed at `/me` with a 500;
-   `/callback` now shows a "Spotify is busy, try again after ..." page instead (tests/test_auth.py). Owner to
-   retry the approval link after the reset. Watch whether the every-minute polling alone exhausts the daily
-   quota; if it recurs on quiet days, slow `syncSchedule` (e.g. rate(5 minutes)).
+3a. **Quota hit again Tue Nov 24, 7:35 PM PT** (`/me/tracks?limit=1` -> 429, `Retry-After` 17h22m, i.e. ~24 h after the
+   previous reset at 12:58 PM: the quota looks like a **fixed 24 h window starting at the first request after a reset**).
+   It ran out after ~6.6 h of every-minute polling (~800 requests) plus the Discover Weekly retry and migration tests,
+   so the quota is roughly 400–1,000 requests/day (Spotify publishes no number; since July 2026 it's per developer
+   account, shared by all its Client IDs). **Fix (Nov 24):** sync schedule rate(1 minute) -> rate(10 minutes) (~290
+   requests/day), and every run now logs `Spotify requests: N this run, M in the window since ...` (state in
+   `/spotify-sync/state/api-usage`); a quota hit logs the total it was reached at. Use those numbers to tune the
+   schedule. `/callback` now shows a "Spotify is busy" page on 429 (tests/test_auth.py). Owner to retry the
+   approval link after the reset (Nov 25 ~1 PM PT).
 4. Verify the first real full Discover Weekly run on **Mon Nov 30, 2026, 4 AM PT** (logs: `aws logs tail /aws/lambda/spotify-sync`).
 5. Security housekeeping: rotate the Spotify client secret (it was pasted in a chat), and move the AWS MCP/CLI off
    the root user to a scoped IAM user.
