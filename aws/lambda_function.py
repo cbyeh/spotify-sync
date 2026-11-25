@@ -58,8 +58,16 @@ class SsmState:
 
     def __init__(self):
         path = f"{PREFIX}/state/"
-        resp = ssm.get_parameters_by_path(Path=path)
-        self.values = {p["Name"][len(path):]: p["Value"] for p in resp.get("Parameters", [])}
+        self.values = {}
+        # GetParametersByPath returns at most 10 parameters per call: follow NextToken to the end.
+        kwargs = {"Path": path, "MaxResults": 10}
+        while True:
+            resp = ssm.get_parameters_by_path(**kwargs)
+            for p in resp.get("Parameters", []):
+                self.values[p["Name"][len(path):]] = p["Value"]
+            if not resp.get("NextToken"):
+                break
+            kwargs["NextToken"] = resp["NextToken"]
         self.path = path
 
     def get(self, key: str) -> str | None:

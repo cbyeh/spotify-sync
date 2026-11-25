@@ -14,9 +14,12 @@ SpotifySyncStack(
     param_prefix=ctx("paramPrefix") or "/spotify-sync",
     sync_schedule=ctx("syncSchedule") or "rate(1 minute)",
     timezone=ctx("timezone") or "America/Los_Angeles",
+    # The region is pinned in cdk.json ("region"), not taken from CDK_DEFAULT_REGION: the CDK CLI
+    # always sets that from the SDK's region, which falls back to us-east-1 when none is configured,
+    # and that would quietly deploy a second copy in the wrong region.
     env=cdk.Environment(
         account=os.getenv("CDK_DEFAULT_ACCOUNT"),
-        region=os.getenv("CDK_DEFAULT_REGION") or "us-west-2",
+        region=ctx("region") or "us-west-2",
     ),
 )
 
