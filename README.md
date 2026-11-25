@@ -48,6 +48,8 @@ To copy your entire Liked Songs history on the first run, set `backfill = true` 
   A song you replay moves back to the top instead of showing up twice.
   The playlist can hold more than 50 because each run merges the newest plays into what's already there.
 - **`mode = "archive"`**: a permanent listening history. Every distinct track you play gets added once, oldest first, and is never removed.
+- **`mode = "last_played"`**: every song you've ever played, with no limit, ordered by when you *last* played it (most recent at the bottom).
+  A replayed song is removed and added again at the end, so it never appears twice and Spotify's "Date added" shows its last play.
 
 You can run both at once: add two `recent` jobs that point at different playlists.
 

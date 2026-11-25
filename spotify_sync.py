@@ -287,6 +287,18 @@ class Spotify:
                                     {"uris": uris[i:i + 100]}).get("snapshot_id")
         self._remember(playlist_id, snapshot if playlist_id in cache else None, known + uris)
 
+    def remove_from_playlist(self, playlist_id: str, uris: list[str]) -> None:
+        """Remove every occurrence of these tracks."""
+        cache = getattr(self, "_playlists", {})
+        known = cache.get(playlist_id, (None, [], 0.0))[1]
+        snapshot = None
+        for i in range(0, len(uris), 100):
+            snapshot = self.request("DELETE", f"/playlists/{playlist_id}/items",
+                                    {"items": [{"uri": u} for u in uris[i:i + 100]]}).get("snapshot_id")
+        gone = set(uris)
+        self._remember(playlist_id, snapshot if playlist_id in cache else None,
+                       [u for u in known if u not in gone])
+
     def replace_playlist(self, playlist_id: str, uris: list[str]) -> None:
         snapshot = self.request("PUT", f"/playlists/{playlist_id}/items", {"uris": uris[:100]}).get("snapshot_id")
         self._remember(playlist_id, snapshot, uris[:100])
@@ -592,6 +604,35 @@ def sync_recent_rolling(sp: Spotify, name: str, dest_id: str, keep: int, dry_run
     return moved
 
 
+def sync_recent_last_played(sp: Spotify, name: str, dest_id: str, dry_run: bool,
+                            only_from_id: str | None = None) -> int:
+    """Every song you play, ever, ordered by when you last played it (most recent at the bottom).
+    A replayed song is removed and added again at the end, so Spotify's "Date added" is its
+    last play. Nothing is ever dropped, and a song never appears twice."""
+    existing = sp.playlist_uris(dest_id)
+    # recent plays, oldest -> newest, each song at its latest play
+    recent = list(reversed(list(dict.fromkeys(sp.recently_played(only_from_id)))))
+    # Find how much of that order already sits at the end of the playlist: the longest k with
+    # existing[-k:] == recent[:k]. Everything after it must be (re)appended in order.
+    k = len(recent)
+    while k and existing[-k:] != recent[:k]:
+        k -= 1
+    to_append = recent[k:]
+    if not to_append:
+        print(f"[{name}] already up to date ({len(existing)} tracks).")
+        return 0
+    present = set(existing)
+    to_move = [u for u in to_append if u in present]
+    verb = "Would add" if dry_run else "Adding"
+    print(f"[{name}] {verb} {len(to_append) - len(to_move)} new, moving {len(to_move)} replayed "
+          f"to the end ({len(present | set(to_append))} tracks total).")
+    if not dry_run:
+        if to_move:
+            sp.remove_from_playlist(dest_id, to_move)
+        sp.add_to_playlist(dest_id, to_append)
+    return len(to_append)
+
+
 def only_from(job: dict) -> str | None:
     """`only_from`: for from = "recent", keep only plays whose source was this playlist
     (e.g. your Discover Weekly). Spotify records the playlist a song was played from."""
@@ -702,8 +743,13 @@ def sync_job(sp: Spotify, job: dict, dry_run: bool) -> int:
         # mode = "rolling" (last N distinct tracks, newest first) or "archive" (every track, kept forever).
         # Older configs without `mode`: `keep` present means rolling, absent means archive.
         mode = str(job.get("mode") or ("rolling" if "keep" in job else "archive")).lower()
-        if mode not in ("rolling", "archive"):
-            raise ValueError('`mode` must be "rolling" or "archive"')
+        mode = mode.replace("-", "_")
+        if mode not in ("rolling", "archive", "last_played"):
+            raise ValueError('`mode` must be "rolling", "archive" or "last_played"')
+        if mode == "last_played":
+            if "keep" in job:
+                raise ValueError('`keep` only applies to mode = "rolling"')
+            return sync_recent_last_played(sp, name, dest_id, dry_run, only_from(job))
         if mode == "rolling":
             keep = int(job.get("keep", 100))
             if not 1 <= keep <= 10000:
