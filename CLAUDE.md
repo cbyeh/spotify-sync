@@ -18,7 +18,7 @@ work on it safely.
   **This is the live deployment** (stack `SpotifySync`, since Nov 24 2026). Change things with `cdk deploy` only.
 - `aws/spend_cap_function.py`: account-wide spend-cap kill switch (see "Spend cap" below). Not part of the CDK stack.
 - `tests/`: dependency-free tests using fakes. Run `python tests/test_sync_logic.py`, `python tests/test_playback.py`,
-  `python tests/test_cache.py` and `python tests/test_spend_cap.py`.
+  `python tests/test_cache.py`, `python tests/test_auth.py` and `python tests/test_spend_cap.py`.
 - `.github/workflows/sync.yml`: alternative hourly runner on GitHub Actions. It skips when secrets aren't set,
   which they aren't for the owner.
 
@@ -109,6 +109,11 @@ tracks, then restores the player. Hard-won rules, each covered by tests in `test
 3. **Pre-existing duplicates** (from IFTTT, found Nov 24 from the S3 cache, no Spotify reads): All Weeklies has 154
    extra copies of 132 tracks (latest at position 5050 of 7532), Liked Songs backup 19. None came from this tool.
    The owner was offered removal (keep first occurrence) and hasn't decided: ask before removing anything.
+3a. **Quota hit again Tue Nov 24, 7:35 PM PT** (`/me/tracks?limit=1` -> 429, reset ~17h; sync paused until
+   Nov 25 12:58 PM PT by its backoff). The owner's first approval-link attempt then failed at `/me` with a 500;
+   `/callback` now shows a "Spotify is busy, try again after ..." page instead (tests/test_auth.py). Owner to
+   retry the approval link after the reset. Watch whether the every-minute polling alone exhausts the daily
+   quota; if it recurs on quiet days, slow `syncSchedule` (e.g. rate(5 minutes)).
 4. Verify the first real full Discover Weekly run on **Mon Nov 30, 2026, 4 AM PT** (logs: `aws logs tail /aws/lambda/spotify-sync`).
 5. Security housekeeping: rotate the Spotify client secret (it was pasted in a chat), and move the AWS MCP/CLI off
    the root user to a scoped IAM user.

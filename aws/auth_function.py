@@ -26,6 +26,7 @@ import os
 import re
 import secrets
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -122,8 +123,15 @@ def approval_link(event: dict | None = None) -> str:
 
 def spotify_user_id(access_token: str) -> str:
     req = urllib.request.Request(s.API + "/me", headers={"Authorization": f"Bearer {access_token}"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.load(resp)["id"]
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.load(resp)["id"]
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            # Usually the developer account's daily quota (shared with the sync), not a brief limit.
+            wait = int(e.headers.get("Retry-After", 0) or 0)
+            raise s.QuotaExceeded(f"GET /me -> 429; resets in {wait // 3600}h{wait % 3600 // 60:02d}m", wait) from None
+        raise s.SpotifyError(f"GET /me -> HTTP {e.code}") from None
 
 
 # --------------------------------------------------------------------------- routes
@@ -210,6 +218,12 @@ def handler(event, context):
             return start(event, qs)
         if path == "/callback":
             return callback(event, qs)
+    except s.QuotaExceeded as e:
+        print(f"::warning::{e}")
+        when = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=e.retry_after)
+        return page(503, "Spotify is busy",
+                    "Spotify's daily request limit for this app is used up, so it couldn't confirm your account. "
+                    f"Nothing changed. Open your approval link again after {when:%Y-%m-%d %H:%M} UTC.")
     except s.SpotifyError as e:
         print(f"::error::{e}")
         return page(502, "Spotify error", html.escape(str(e)))
