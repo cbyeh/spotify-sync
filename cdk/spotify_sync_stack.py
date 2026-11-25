@@ -62,6 +62,7 @@ class SpotifySyncStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, *,
                  name: str = "spotify-sync",
                  schedules_enabled: bool = True,
+                 cache_only: bool = False,
                  param_prefix: str = "/spotify-sync",
                  alert_email: str | None = None,
                  sync_schedule: str = "rate(1 minute)",
@@ -75,6 +76,14 @@ class SpotifySyncStack(Stack):
                  **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
         prefix = "/" + param_prefix.strip("/")
+
+        if cache_only:
+            # `-c importCache=true` (MIGRATION.md step 3b): only the cache bucket and its policy, at the
+            # same construct paths (so the same logical IDs) as in the full stack. `cdk import` adopts
+            # the existing hand-made bucket into the stack with this template; the normal `cdk deploy`
+            # afterwards adds everything else around it, and the cached playlists survive.
+            self._cache_bucket(name)
+            return
 
         code = lambda_.Code.from_asset(REPO_ROOT, exclude=ASSET_EXCLUDE)
 
@@ -106,12 +115,7 @@ class SpotifySyncStack(Stack):
         # --- playlist cache: each destination's snapshot_id + track URIs, so cold starts and the daily
         #     full check don't re-read big playlists (that's what exhausts Spotify's daily quota).
         #     Only a cache: safe to lose, so it's retained on `cdk destroy` simply to avoid surprises.
-        cache_bucket = s3.Bucket(
-            self, "PlaylistCache", bucket_name=f"{name}-cache-{Aws.ACCOUNT_ID}-{Aws.REGION}",
-            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-            object_ownership=s3.ObjectOwnership.BUCKET_OWNER_ENFORCED,
-            encryption=s3.BucketEncryption.S3_MANAGED, enforce_ssl=True,
-            removal_policy=RemovalPolicy.RETAIN)
+        cache_bucket = self._cache_bucket(name)
         lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
             resources=[cache_bucket.arn_for_objects("cache/*")]))
@@ -189,3 +193,17 @@ class SpotifySyncStack(Stack):
                   value=f"aws lambda invoke --function-name {name}-auth "
                         "--cli-binary-format raw-in-base64-out --payload file://cdk/link.json link-out.json",
                   description="Run from the repo root, then open the approval_link in link-out.json")
+
+    def _cache_bucket(self, name: str) -> s3.Bucket:
+        # The same properties as the hand-made bucket (SSE-S3, BucketOwnerEnforced, all public access
+        # blocked, HTTPS-only policy), so adopting it with `cdk import` changes nothing about it.
+        # `cdk import` needs a DeletionPolicy on every imported resource, so the bucket policy
+        # (created by enforce_ssl) is retained along with the bucket.
+        bucket = s3.Bucket(
+            self, "PlaylistCache", bucket_name=f"{name}-cache-{Aws.ACCOUNT_ID}-{Aws.REGION}",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            object_ownership=s3.ObjectOwnership.BUCKET_OWNER_ENFORCED,
+            encryption=s3.BucketEncryption.S3_MANAGED, enforce_ssl=True,
+            removal_policy=RemovalPolicy.RETAIN)
+        bucket.policy.apply_removal_policy(RemovalPolicy.RETAIN)
+        return bucket

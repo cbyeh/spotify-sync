@@ -26,7 +26,7 @@ All commands are PowerShell, run from the repo root unless a step says otherwise
 | **Changes** | Old CloudWatch logs are deleted with the hand-built log groups (they only kept 14 days anyway). |
 | **Changes** | Both functions get `TOPIC_ARN` and `PARAM_PREFIX` only. `spotify-sync-auth` no longer has `AUTH_BASE_URL` (see below). The code package keeps the repo layout, so the handlers are `aws.lambda_function.handler` and `aws.auth_function.handler`. |
 | **New** | The stack owns one plain String parameter, `/spotify-sync/auth-url`, holding the new function URL. |
-| **Recreated** | The playlist cache bucket `spotify-sync-cache-<account>-<region>` (same name, now owned by the stack, retained on `cdk destroy`). It's only a cache: the first runs after the deploy re-read each destination playlist once and refill it. |
+| **Adopted** | The playlist cache bucket `spotify-sync-cache-<account>-<region>` and its HTTPS-only policy are imported into the stack as they are (step 3b), so the cached playlists survive and the first runs after the deploy don't re-read All Weeklies (~75 requests). Both are retained on `cdk destroy`. |
 
 ### Why `AUTH_BASE_URL` isn't needed any more
 
@@ -208,6 +208,34 @@ aws ssm get-parameter --name /spotify-sync/auth-url --query Parameter.Value --ou
 
 `ParameterNotFound` is what you want. If it exists, it's only a URL (not a secret): delete it in step 4.
 
+## 3b. Adopt the cache bucket into the stack (the live sync keeps running)
+
+The hand-made cache bucket has the same name as the stack's, so instead of deleting and recreating it
+(which empties the cache), `cdk import` makes it part of the stack as it is. `-c importCache=true`
+synthesizes a template with only the bucket and its policy, at the same logical IDs as the full stack;
+`--no-version-reporting` leaves out CDK's metadata resource, which can't be imported. This creates the
+`SpotifySync` stack holding just those two resources and changes nothing about the bucket, its
+policy or its contents, so the hand-built functions keep using it.
+
+```powershell
+$Cache = "spotify-sync-cache-$Account-$env:AWS_REGION"
+aws s3api get-bucket-policy --bucket $Cache --query Policy --output text | Save "cache-bucket-policy.json"
+'{"PlaylistCache31D9056C":{"BucketName":"' + $Cache + '"},"PlaylistCachePolicy6E59AAD1":{"Bucket":"' + $Cache + '"}}' |
+  Set-Content -Encoding ascii (Join-Path $B "cache-import-map.json")
+cd cdk
+cdk import -c importCache=true --no-version-reporting --resource-mapping (Join-Path $B "cache-import-map.json") --force
+cd ..
+aws cloudformation describe-stack-resources --stack-name SpotifySync --query "StackResources[].[LogicalResourceId,ResourceStatus]" --output text
+aws s3api list-objects-v2 --bucket $Cache --query "KeyCount"      # same number of cached playlists as before
+```
+
+Expected: the two `PlaylistCache...` resources, `UPDATE_COMPLETE`. If the logical IDs in the error
+don't match, the stack code changed the bucket's construct path: check with
+`cdk synth -c importCache=true --no-version-reporting` and update the map.
+
+To undo before step 4: `cd cdk; cdk destroy --force; cd ..` removes the stack and **keeps** the bucket
+and its policy (both are retained), so the hand-built setup is exactly as before.
+
 ## 4. Delete the hand-built resources (sync is down from here)
 
 Run these in order. Each one should print nothing or a small JSON result, not an error.
@@ -243,13 +271,11 @@ aws sns delete-topic --topic-arn $Topic
 # 4f. Only if step 3 found it
 # aws ssm delete-parameter --name /spotify-sync/auth-url
 
-# 4g. The hand-made playlist cache bucket (same name as the stack's). Only a cache: it refills itself.
-aws s3 rb "s3://spotify-sync-cache-$Account-$env:AWS_REGION" --force
+# Do NOT delete the cache bucket: since step 3b it belongs to the stack.
 ```
 
-Wait until Spotify's daily playlist quota isn't exhausted before migrating: the first runs after the
-deploy re-read every destination playlist once to refill the cache (All Weeklies is ~75 requests). If
-`/spotify-sync/state/backoff-until` exists and is in the future, migrate after that time.
+Don't migrate while Spotify's quota is exhausted (`/spotify-sync/state/backoff-until` in the future):
+the cache survives, but the first runs still check every job against Spotify.
 
 If `list-attached-role-policies` showed a customer-managed policy (`arn:aws:iam::<account>:policy/...`),
 delete it too after detaching (`aws iam delete-policy --policy-arn ...`); the stack doesn't need it.
@@ -324,7 +350,8 @@ From now on, change things with `cdk deploy` only. Delete `$B` once you no longe
 ## Roll back
 
 `cdk destroy` removes everything the stack created (including `/spotify-sync/auth-url`) and leaves the
-other SSM parameters alone. You can then rebuild the hand-built setup from the backup in `$B`.
+other SSM parameters alone. The cache bucket and its policy are retained, with their contents, so the
+rebuilt functions can use them as before. You can then rebuild the hand-built setup from the backup in `$B`.
 
 The old function URL can't be restored: a recreated function gets a new URL, so add its `/callback` in the
 Spotify dashboard again, as in step 6.
