@@ -45,8 +45,9 @@ the one sent in `/callback`, as Spotify requires.
 
 ## 1. Prerequisites (once per computer)
 
-- [Node.js](https://nodejs.org/) LTS and the CDK CLI: `npm install -g aws-cdk`, then `cdk --version`.
-- Python 3.11+.
+- [Node.js](https://nodejs.org/) LTS. The CDK app is TypeScript; `npm ci` in step 2 installs it with the CDK CLI.
+  The `cdk` commands below work with a global `npm install -g aws-cdk` or as `npx cdk`.
+- Python 3.11+, to run the tests before deploying.
 - [AWS CLI v2](https://aws.amazon.com/cli/), signed in to the account the live deployment is in.
   A recent v2 is needed only if you roll back (`--invoked-via-function-url`).
 
@@ -64,8 +65,7 @@ Keep this PowerShell window open: later steps use `$Account`, `$B` and the regio
 
 ```powershell
 cd cdk
-python -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+npm ci                                 # the CDK app's dependencies, from package-lock.json
 cdk bootstrap                          # once per account + region; harmless if already done
 cdk ls --long                          # SpotifySync must show your account and us-west-2
 cdk synth -c alertEmail=you@example.com > $null
@@ -138,7 +138,7 @@ curl.exe -s -w "`n%{http_code}`n" ($Link -replace 'k=.*', 'k=wrong')
 
 Expected: first `302 https://accounts.spotify.com/authorize?...client_id=smoke-test...`; then the
 function's own "Link not valid" page and `403`. If either returns `{"Message":"Forbidden"}`, the
-function URL's permissions are missing (see the aws-cdk-lib version note in `requirements.txt`).
+function URL's permissions are missing (`aws-cdk-lib` must be 2.220.0 or later, see `package.json` and the note in `spotify-sync-stack.ts`).
 
 **4. Schedules.**
 

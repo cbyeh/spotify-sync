@@ -29,8 +29,10 @@ resource names, so follow [cdk/MIGRATION.md](../cdk/MIGRATION.md) instead of the
 
 ## Prerequisites (once per computer)
 
-- [Node.js](https://nodejs.org/) (LTS), Python 3.11+ and [AWS CLI v2](https://aws.amazon.com/cli/), already signed in (`aws sts get-caller-identity` works)
-- CDK CLI: `npm install -g aws-cdk`. The Python side (`aws-cdk-lib` 2.220 or later) is installed from `cdk/requirements.txt` below.
+- [Node.js](https://nodejs.org/) (LTS) and [AWS CLI v2](https://aws.amazon.com/cli/), already signed in (`aws sts get-caller-identity` works).
+  Python 3.11+ is only needed to run the tests or the CLI locally; the Lambdas run Python on AWS.
+- The CDK app is TypeScript (`cdk/app.ts`, `cdk/spotify-sync-stack.ts`). `npm ci` in `cdk/` installs it together with the
+  CDK CLI; the commands below use `cdk`, which works with a global `npm install -g aws-cdk` or as `npx cdk`.
 
 ## Setup
 
@@ -51,8 +53,7 @@ aws ssm put-parameter --name /spotify-sync/client-secret --type SecureString --v
 
 ```powershell
 cd cdk
-python -m venv .venv; .\.venv\Scripts\Activate.ps1      # macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
+npm ci                                                   # the CDK app's dependencies, from package-lock.json
 $env:AWS_REGION = "us-west-2"; $env:CDK_DEFAULT_REGION = "us-west-2"
 cdk bootstrap                                            # once per AWS account + region
 cdk diff   -c alertEmail=you@example.com                 # optional: see what will be created

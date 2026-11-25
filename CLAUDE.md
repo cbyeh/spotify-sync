@@ -12,7 +12,10 @@ work on it safely.
   markers in SSM under `/spotify-sync/state/`, plus an overlap lock at `/spotify-sync/lock`.
 - `aws/auth_function.py`: the approval/renewal Lambda behind a public function URL (`/start?k=<link key>`,
   `/callback`, daily `{"action":"remind"}`, `{"action":"link"}`).
-- `cdk/`: Python CDK app describing the same infrastructure. **Never synthesized or deployed yet** (see below).
+- `cdk/`: TypeScript CDK app (`app.ts`, `spotify-sync-stack.ts`; `npm ci`, then `cdk ...` or `npx cdk ...`) describing
+  the same infrastructure. Ported from Python on Nov 24; all 5 synth modes (default, no alertEmail, smoke, importCache,
+  importCache+smoke) gave templates identical to the Python app's, logical IDs and asset hash included.
+  Smoke-tested (MIGRATION.md 2b) but the live stack isn't deployed yet (see below).
 - `aws/spend_cap_function.py`: account-wide spend-cap kill switch (see "Spend cap" below). Not part of the CDK stack.
 - `tests/`: dependency-free tests using fakes. Run `python tests/test_sync_logic.py`, `python tests/test_playback.py`,
   `python tests/test_cache.py` and `python tests/test_spend_cap.py`.
