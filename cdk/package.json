@@ -1,0 +1,19 @@
+{
+  "name": "spotify-sync-cdk",
+  "private": true,
+  "description": "CDK app for spotify-sync (infrastructure only; the Lambda code is Python)",
+  "scripts": {
+    "build": "tsc",
+    "cdk": "cdk"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.278.0",
+    "constructs": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "aws-cdk": "^2.1149.0",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.9.0"
+  }
+}

@@ -1,5 +1,0 @@
-# >= 2.220.0: add_function_url(auth_type=NONE) adds the lambda:InvokeFunction +
-# InvokedViaFunctionUrl statement that function URLs need since Oct 2025.
-# Everything else the stack uses (Runtime.PYTHON_3_13, Function(log_group=...)) is older.
-aws-cdk-lib>=2.220.0,<3
-constructs>=10.0.0,<11
