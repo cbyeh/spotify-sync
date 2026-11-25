@@ -47,7 +47,9 @@ import { Construct } from "constructs";
 const REPO_ROOT = path.resolve(__dirname, "..");
 
 // The code asset keeps the repo layout (handlers are aws.lambda_function / aws.auth_function) but
-// contains only what the Lambdas need: spotify_sync.py, config.toml and aws/*.py.
+// contains only what the Lambdas need: spotify_sync.py, config.toml, aws/lambda_function.py and
+// aws/auth_function.py. Each file is named, not aws/*.py, so other code in aws/ (the spend-cap kill
+// switch, which isn't part of this stack) stays out of the package.
 // This is an allowlist in CDK's default GLOB ignore mode: "*" and ".*" exclude every entry (with
 // matchBase they match any basename, and "*" alone skips dotfiles such as .env), then "!" patterns
 // re-include. Excluded directories (cdk/ with its node_modules, cdk.out, .git, .github, tests, docs,
@@ -55,7 +57,7 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 const ASSET_EXCLUDE = [
   "*", ".*",
   "!spotify_sync.py", "!config.toml",
-  "!aws", "!aws/*.py",
+  "!aws", "!aws/lambda_function.py", "!aws/auth_function.py",
 ];
 
 const LAMBDA_BASIC = "service-role/AWSLambdaBasicExecutionRole";
