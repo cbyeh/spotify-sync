@@ -103,7 +103,8 @@ tracks, then restores the player. Hard-won rules, each covered by tests in `test
 1. ~~Merge the `cdk-parity` PR~~ (done). Smoke test, then do the migration (above). Not near Monday 4 AM.
 2. ~~Reduce playlist reads~~: **done** (S3 cache above; a playlist is re-read only when its snapshot_id changed or
    weekly as a safety net). The `cdk-parity` PR includes the bucket, its permissions and `CACHE_BUCKET`;
-   MIGRATION.md step 4g deletes the hand-made bucket (cache only) so the stack can recreate it.
+   MIGRATION.md step 3b adopts the hand-made bucket and its policy with `cdk import -c importCache=true`
+   (tested on a smoke copy Nov 24: the contents survived the import and the full deploy), so the cache isn't lost.
 3. **Pre-existing duplicates** (from IFTTT, found Nov 24 from the S3 cache, no Spotify reads): All Weeklies has 154
    extra copies of 132 tracks (latest at position 5050 of 7532), Liked Songs backup 19. None came from this tool.
    The owner was offered removal (keep first occurrence) and hasn't decided: ask before removing anything.
