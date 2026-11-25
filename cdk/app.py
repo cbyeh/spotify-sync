@@ -8,10 +8,18 @@ from spotify_sync_stack import SpotifySyncStack
 app = cdk.App()
 ctx = app.node.try_get_context
 
+# `-c smoke=true` deploys a throwaway copy for testing the stack itself (cdk/MIGRATION.md, step 2b):
+# every name gets a "-smoke" suffix, it reads its own SSM prefix (never the real Spotify secrets,
+# whose refresh token a second copy could rotate out from under the live one), its schedules are
+# created switched off, and it sends no email. It doesn't touch the live deployment.
+smoke = str(ctx("smoke") or "").lower() in ("1", "true", "yes")
+
 SpotifySyncStack(
-    app, "SpotifySync",
-    alert_email=ctx("alertEmail") or None,
-    param_prefix=ctx("paramPrefix") or "/spotify-sync",
+    app, "SpotifySyncSmoke" if smoke else "SpotifySync",
+    name="spotify-sync-smoke" if smoke else "spotify-sync",
+    schedules_enabled=not smoke,
+    alert_email=None if smoke else (ctx("alertEmail") or None),
+    param_prefix="/spotify-sync-smoke" if smoke else (ctx("paramPrefix") or "/spotify-sync"),
     sync_schedule=ctx("syncSchedule") or "rate(1 minute)",
     timezone=ctx("timezone") or "America/Los_Angeles",
     # The region is pinned in cdk.json ("region"), not taken from CDK_DEFAULT_REGION: the CDK CLI

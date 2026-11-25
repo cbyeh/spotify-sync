@@ -53,9 +53,11 @@ All in us-west-2:
 
 ## Next task: move the live deployment onto CDK
 
-A background worker prepared branch **`cdk-parity`** with a PR: the stack checked against CDK docs and matched
-to the live setup above, plus `cdk/MIGRATION.md`. Review that PR, then on the owner's machine (Windows, PowerShell):
-`cdk synth` → `cdk diff` → follow MIGRATION.md. Key points:
+PR #1 (`cdk-parity`: the stack matched to the live setup above, plus `cdk/MIGRATION.md`) is **merged into main**.
+On the owner's machine (Windows, PowerShell): `cdk synth` → `cdk diff` → **smoke test** (MIGRATION.md step 2b:
+`cdk deploy -c smoke=true` makes a separate `-smoke` copy with dummy credentials and disabled schedules, checks
+it, then destroys it) → follow the rest of MIGRATION.md. The stack has never been synthesized for real yet: the
+`name`/`schedules_enabled` parameters were only checked against a stub. Key points:
 - The stack reuses the same physical names, so the hand-built resources must be deleted first, **except SSM**.
 - The CDK asset keeps the repo layout, so handlers are `aws.lambda_function.handler` / `aws.auth_function.handler`.
 - The new function URL means adding the new `/callback` redirect URI in the Spotify developer dashboard.
@@ -96,17 +98,15 @@ tracks, then restores the player. Hard-won rules, each covered by tests in `test
 
 ## Open items
 
-0. This week's (Nov 23) full Discover Weekly copy failed on the quota. A one-time schedule
-   `spotify-sync-playback-retry` runs it on Tue Nov 24 2026 at 2 PM PT, after the reset, and deletes itself.
-   Check it worked.
+0. ~~Nov 23 Discover Weekly retry~~: done Tue Nov 24, 2 PM (30 read, 17 new; week marked done).
 
-1. Review and merge the `cdk-parity` PR, then do the migration (above).
+1. ~~Merge the `cdk-parity` PR~~ (done). Smoke test, then do the migration (above). Not near Monday 4 AM.
 2. ~~Reduce playlist reads~~: **done** (S3 cache above; a playlist is re-read only when its snapshot_id changed or
    weekly as a safety net). The `cdk-parity` PR includes the bucket, its permissions and `CACHE_BUCKET`;
    MIGRATION.md step 4g deletes the hand-made bucket (cache only) so the stack can recreate it.
-3. Check All Weeklies (`41JXOe9PZ9g6v2PUW687l6`) for **pre-existing duplicates** from before this tool. The sync itself
-   never adds one (it dedupes by track URI against the whole playlist), but the first scan attempt hit a 429.
-   Re-run slowly, report exact-URI duplicates and same-name/artist pairs, and ask the owner before removing anything.
+3. **Pre-existing duplicates** (from IFTTT, found Nov 24 from the S3 cache, no Spotify reads): All Weeklies has 154
+   extra copies of 132 tracks (latest at position 5050 of 7532), Liked Songs backup 19. None came from this tool.
+   The owner was offered removal (keep first occurrence) and hasn't decided: ask before removing anything.
 4. Verify the first real full Discover Weekly run on **Mon Nov 30, 2026, 4 AM PT** (logs: `aws logs tail /aws/lambda/spotify-sync`).
 5. Security housekeeping: rotate the Spotify client secret (it was pasted in a chat), and move the AWS MCP/CLI off
    the root user to a scoped IAM user.

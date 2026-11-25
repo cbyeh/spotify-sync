@@ -90,6 +90,79 @@ Check what you are about to deploy:
   Expected: `aws\auth_function.py`, `aws\lambda_function.py`, `config.toml`, `spotify_sync.py`.
 - `config.toml` in your working copy is the one you want live (the deploy uploads it).
 
+## 2b. Smoke test the stack (optional, recommended; the live deployment isn't touched)
+
+`-c smoke=true` deploys a throwaway copy, stack `SpotifySyncSmoke`. Every name ends in `-smoke`, it
+reads its own SSM prefix `/spotify-sync-smoke`, its schedules are created **switched off**, and it
+sends no email. It never gets the real Spotify secrets: the sync writes back a rotated refresh token,
+so a second copy holding the real one could invalidate the live sync's token. With dummy credentials
+it can still prove the parts most likely to break in a real deploy: the code package and handler
+paths, the IAM permissions, the public function URL and its two permissions, `auth-url`, and the
+schedules. It takes about 5 minutes and costs nothing noticeable.
+
+```powershell
+cd cdk
+cdk deploy -c smoke=true --require-approval never
+cd ..
+$Smoke = "/spotify-sync-smoke"
+aws ssm put-parameter --name "$Smoke/client-id"     --value smoke-test --type String --overwrite > $null
+aws ssm put-parameter --name "$Smoke/client-secret" --value smoke-test --type String --overwrite > $null
+Set-Content smoke-dry.json '{"dry_run":true}'
+```
+
+**1. Sync function: package, handler, SSM read.**
+
+```powershell
+aws lambda invoke --function-name spotify-sync-smoke --cli-binary-format raw-in-base64-out --payload file://smoke-dry.json smoke-sync.json > $null
+Get-Content smoke-sync.json
+```
+
+Expected: `{"ok": true, "skipped": "not approved yet"}`. `Runtime.ImportModuleError` or
+`Runtime.HandlerNotFound` means a packaging or handler-path problem; `AccessDeniedException` means the role.
+
+**2. Approval function: `auth-url` and SSM write.**
+
+```powershell
+aws lambda invoke --function-name spotify-sync-smoke-auth --cli-binary-format raw-in-base64-out --payload file://cdk/link.json smoke-link.json > $null
+$Link = (Get-Content smoke-link.json | ConvertFrom-Json).approval_link; $Link
+```
+
+Expected: `https://<id>.lambda-url.us-west-2.on.aws/start?k=<64 hex characters>`.
+
+**3. Public URL and its permissions.** Don't open the link in a browser (there's nothing to approve).
+
+```powershell
+curl.exe -s -o NUL -w "%{http_code} %{redirect_url}`n" $Link
+curl.exe -s -w "`n%{http_code}`n" ($Link -replace 'k=.*', 'k=wrong')
+```
+
+Expected: first `302 https://accounts.spotify.com/authorize?...client_id=smoke-test...`; then the
+function's own "Link not valid" page and `403`. If either returns `{"Message":"Forbidden"}`, the
+function URL's permissions are missing (see the aws-cdk-lib version note in `requirements.txt`).
+
+**4. Schedules.**
+
+```powershell
+aws scheduler get-schedule --name spotify-sync-smoke --query "{State:State,Tz:ScheduleExpressionTimezone,Target:Target.Arn,Input:Target.Input}"
+aws scheduler list-schedules --name-prefix spotify-sync-smoke --query "Schedules[].[Name,State]" --output text
+```
+
+Expected: 5 schedules, all `DISABLED`, timezone `America/Los_Angeles`, target `...:function:spotify-sync-smoke`.
+
+**5. Remove the copy.**
+
+```powershell
+cd cdk; cdk destroy -c smoke=true --force; cd ..
+aws s3 rb "s3://spotify-sync-smoke-cache-$Account-us-west-2"      # retained by design; it's empty
+foreach ($p in "client-id", "client-secret", "link-key") { aws ssm delete-parameter --name "$Smoke/$p" }
+aws ssm get-parameters-by-path --path $Smoke --recursive --query "Parameters[].Name" --output text   # expect nothing
+Remove-Item smoke-*.json
+```
+
+Not covered (it needs real Spotify credentials): actual Spotify calls and the S3 cache permissions.
+Step 7 checks those on the real stack, and the cache permissions are the same statements the
+hand-built role already uses successfully.
+
 ## 3. Back up the hand-built setup (read-only)
 
 The backup goes outside the repo, so it can't end up in a commit or the code package. It contains no

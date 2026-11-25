@@ -5,6 +5,11 @@ spotify-sync-auth, roles spotify-sync-lambda and spotify-sync-scheduler, topic s
 alarm spotify-sync-failing, five schedules, two log groups). To move an existing hand-built
 deployment onto this stack, follow cdk/MIGRATION.md.
 
+Every physical name starts with `name` (default "spotify-sync"). A different name gives a fully
+separate copy, which is how the smoke test (`cdk deploy -c smoke=true`, see MIGRATION.md) runs
+next to the live deployment without touching it. `schedules_enabled=False` creates the schedules
+switched off.
+
 Secrets are NOT managed here. You create <prefix>/client-id and <prefix>/client-secret yourself
 (CloudFormation can't create SecureString parameters, and secrets don't belong in templates).
 The functions write the rest (refresh-token, link-key, user-id, state/*, ...) at runtime, so they
@@ -55,6 +60,8 @@ LAMBDA_BASIC = "service-role/AWSLambdaBasicExecutionRole"
 
 class SpotifySyncStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, *,
+                 name: str = "spotify-sync",
+                 schedules_enabled: bool = True,
                  param_prefix: str = "/spotify-sync",
                  alert_email: str | None = None,
                  sync_schedule: str = "rate(1 minute)",
@@ -72,7 +79,7 @@ class SpotifySyncStack(Stack):
         code = lambda_.Code.from_asset(REPO_ROOT, exclude=ASSET_EXCLUDE)
 
         # --- notifications: renewal reminders + failure alerts
-        topic = sns.Topic(self, "Alerts", topic_name="spotify-sync-alerts")
+        topic = sns.Topic(self, "Alerts", topic_name=f"{name}-alerts")
         if alert_email:
             topic.add_subscription(subs.EmailSubscription(alert_email))
         else:
@@ -83,7 +90,7 @@ class SpotifySyncStack(Stack):
 
         # --- one role for both functions: basic logging + the SSM prefix + publishing to the topic
         lambda_role = iam.Role(
-            self, "LambdaRole", role_name="spotify-sync-lambda",
+            self, "LambdaRole", role_name=f"{name}-lambda",
             assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
             managed_policies=[iam.ManagedPolicy.from_aws_managed_policy_name(LAMBDA_BASIC)])
         # arn:aws:ssm:<region>:<account>:parameter/spotify-sync/*
@@ -100,7 +107,7 @@ class SpotifySyncStack(Stack):
         #     full check don't re-read big playlists (that's what exhausts Spotify's daily quota).
         #     Only a cache: safe to lose, so it's retained on `cdk destroy` simply to avoid surprises.
         cache_bucket = s3.Bucket(
-            self, "PlaylistCache", bucket_name=f"spotify-sync-cache-{Aws.ACCOUNT_ID}-{Aws.REGION}",
+            self, "PlaylistCache", bucket_name=f"{name}-cache-{Aws.ACCOUNT_ID}-{Aws.REGION}",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             object_ownership=s3.ObjectOwnership.BUCKET_OWNER_ENFORCED,
             encryption=s3.BucketEncryption.S3_MANAGED, enforce_ssl=True,
@@ -113,12 +120,12 @@ class SpotifySyncStack(Stack):
             actions=["s3:ListBucket"], resources=[cache_bucket.bucket_arn],
             conditions={"StringLike": {"s3:prefix": ["cache/*"]}}))
 
-        def make_function(cid: str, name: str, handler: str, timeout: Duration) -> lambda_.Function:
+        def make_function(cid: str, fn_name: str, handler: str, timeout: Duration) -> lambda_.Function:
             log_group = logs.LogGroup(
-                self, f"{cid}Logs", log_group_name=f"/aws/lambda/{name}",
+                self, f"{cid}Logs", log_group_name=f"/aws/lambda/{fn_name}",
                 retention=logs.RetentionDays.TWO_WEEKS, removal_policy=RemovalPolicy.DESTROY)
             return lambda_.Function(
-                self, cid, function_name=name,
+                self, cid, function_name=fn_name,
                 runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
                 handler=handler, code=code, memory_size=128, timeout=timeout, role=lambda_role,
                 environment={"PARAM_PREFIX": prefix, "TOPIC_ARN": topic.topic_arn,
@@ -126,9 +133,9 @@ class SpotifySyncStack(Stack):
                 log_group=log_group)
 
         # 5 minutes: a cold start may have to page through a large archive (~7k tracks ≈ 50 s)
-        sync_fn = make_function("SyncFunction", "spotify-sync", "aws.lambda_function.handler",
+        sync_fn = make_function("SyncFunction", name, "aws.lambda_function.handler",
                                 Duration.minutes(5))
-        auth_fn = make_function("AuthFunction", "spotify-sync-auth", "aws.auth_function.handler",
+        auth_fn = make_function("AuthFunction", f"{name}-auth", "aws.auth_function.handler",
                                 Duration.minutes(2))
 
         # --- public approval URL (guarded in code by the secret link key). With auth type NONE,
@@ -139,24 +146,25 @@ class SpotifySyncStack(Stack):
         # request itself doesn't carry it (scheduled reminders, {"action":"link"}).
         ssm.StringParameter(self, "AuthUrlParam", parameter_name=f"{prefix}/auth-url",
                             string_value=url.url,
-                            description="Public URL of spotify-sync-auth (managed by the SpotifySync stack)")
+                            description=f"Public URL of {name}-auth (managed by the {construct_id} stack)")
 
         # --- schedules (EventBridge Scheduler)
-        scheduler_role = iam.Role(self, "SchedulerRole", role_name="spotify-sync-scheduler",
+        scheduler_role = iam.Role(self, "SchedulerRole", role_name=f"{name}-scheduler",
                                   assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com"))
         sync_fn.grant_invoke(scheduler_role)
         auth_fn.grant_invoke(scheduler_role)
-        for cid, name, expr, fn, payload in [
-            ("SyncSchedule", "spotify-sync", sync_schedule, sync_fn, "{}"),
+        for cid, sched_name, expr, fn, payload in [
+            ("SyncSchedule", name, sync_schedule, sync_fn, "{}"),
             # once a day, ignore the "anything new?" shortcut and re-check every playlist
-            ("FullCheckSchedule", "spotify-sync-full", full_check_schedule, sync_fn, '{"full":true}'),
-            ("ReminderSchedule", "spotify-sync-reminder", reminder_schedule, auth_fn, '{"action":"remind"}'),
-            ("PlaybackSchedule", "spotify-sync-playback", playback_schedule, sync_fn, '{"playback":true}'),
-            ("PlaybackFinalSchedule", "spotify-sync-playback-final", playback_final_schedule, sync_fn,
+            ("FullCheckSchedule", f"{name}-full", full_check_schedule, sync_fn, '{"full":true}'),
+            ("ReminderSchedule", f"{name}-reminder", reminder_schedule, auth_fn, '{"action":"remind"}'),
+            ("PlaybackSchedule", f"{name}-playback", playback_schedule, sync_fn, '{"playback":true}'),
+            ("PlaybackFinalSchedule", f"{name}-playback-final", playback_final_schedule, sync_fn,
              '{"playback":true,"final":true}'),
         ]:
             sched = scheduler.CfnSchedule(
-                self, cid, name=name, schedule_expression=expr, schedule_expression_timezone=timezone,
+                self, cid, name=sched_name, schedule_expression=expr, schedule_expression_timezone=timezone,
+                state="ENABLED" if schedules_enabled else "DISABLED",
                 flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
                 target=scheduler.CfnSchedule.TargetProperty(
                     arn=fn.function_arn, role_arn=scheduler_role.role_arn, input=payload,
@@ -167,17 +175,17 @@ class SpotifySyncStack(Stack):
         # --- email if the sync keeps failing (10+ failed runs an hour, 3 hours in a row);
         #     the odd transient Spotify error at one run per minute won't trigger it
         alarm = cw.Alarm(
-            self, "SyncFailing", alarm_name="spotify-sync-failing",
+            self, "SyncFailing", alarm_name=f"{name}-failing",
             metric=sync_fn.metric_errors(period=Duration.hours(1), statistic="Sum"),
             threshold=10, evaluation_periods=3,
             comparison_operator=cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
             treat_missing_data=cw.TreatMissingData.NOT_BREACHING)
         alarm.add_alarm_action(cw_actions.SnsAction(topic))
 
-        CfnOutput(self, "AuthUrl", value=url.url, description="Public URL of spotify-sync-auth")
+        CfnOutput(self, "AuthUrl", value=url.url, description=f"Public URL of {name}-auth")
         CfnOutput(self, "SpotifyRedirectUri", value=f"{url.url}callback",
                   description="Add this to your Spotify app's Redirect URIs (once)")
         CfnOutput(self, "GetApprovalLink",
-                  value="aws lambda invoke --function-name spotify-sync-auth "
+                  value=f"aws lambda invoke --function-name {name}-auth "
                         "--cli-binary-format raw-in-base64-out --payload file://cdk/link.json link-out.json",
                   description="Run from the repo root, then open the approval_link in link-out.json")
