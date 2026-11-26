@@ -18,7 +18,8 @@ work on it safely.
   **This is the live deployment** (stack `SpotifySync`, since Nov 24 2026). Change things with `cdk deploy` only.
 - `aws/spend_cap_function.py`: account-wide spend-cap kill switch (see "Spend cap" below). Not part of the CDK stack.
 - `tests/`: dependency-free tests using fakes. Run `python tests/test_sync_logic.py`, `python tests/test_playback.py`,
-  `python tests/test_cache.py`, `python tests/test_auth.py`, `python tests/test_usage.py` and `python tests/test_spend_cap.py`.
+  `python tests/test_cache.py`, `python tests/test_auth.py`, `python tests/test_usage.py`, `python tests/test_playlog.py`
+  and `python tests/test_spend_cap.py`.
 - `.github/workflows/sync.yml`: alternative hourly runner on GitHub Actions. It skips when secrets aren't set,
   which they aren't for the owner.
 
@@ -30,7 +31,7 @@ cdk/MIGRATION.md with the cache bucket adopted by `cdk import` (step 3b). The ha
 `cdk deploy -c alertEmail=<the owner's address, see the backup's topic-subscriptions.json>`; **always pass the same
 alertEmail**, or the subscription is removed. Use `-c schedules=off` + a manual `{"dry_run": true}` before switching
 the schedules back on after risky changes. The CDK account is bootstrapped (`CDKToolkit`). All in us-west-2:
-- Lambdas `spotify-sync` (python3.13, arm64, 128 MB, 300 s; env `PARAM_PREFIX`, `TOPIC_ARN`, `CACHE_BUCKET`) and `spotify-sync-auth`
+- Lambdas `spotify-sync` (python3.13, arm64, 128 MB, 300 s; env `PARAM_PREFIX`, `TOPIC_ARN`, `CACHE_BUCKET`, `HISTORY_BUCKET`) and `spotify-sync-auth`
   (120 s; same env). Both use role `spotify-sync-lambda`. Handlers `aws.lambda_function.handler` / `aws.auth_function.handler`.
   `spotify-sync-auth` reads its public URL from the stack-owned `/spotify-sync/auth-url` (no `AUTH_BASE_URL` any more).
 - Schedules (EventBridge Scheduler, role `spotify-sync-scheduler`, timezone America/Los_Angeles):
@@ -43,6 +44,11 @@ the schedules back on after risky changes. The CDK account is bootstrapped (`CDK
   holds each destination's snapshot_id + track URIs, so cold starts and the daily full check don't re-read big playlists.
   It's safe to delete (it's only a cache). The role may only Get/Put/Delete `cache/*`, plus ListBucket limited to the
   `cache/` prefix (without it, S3 reports a missing key as AccessDenied instead of NoSuchKey).
+- S3 bucket `spotify-sync-history-<account-id>-us-west-2` (stack resource `History`, added Nov 25; private, versioned,
+  SSE-S3, HTTPS-only, retained on destroy): the listening-history log, one `plays/YYYY/MM/DD/<played_at>.json` per
+  finished play, written by `_log_plays` in `aws/lambda_function.py` from the plays the run already fetched (no extra
+  Spotify requests). Marker `/spotify-sync/state/play-log` = newest played_at written. The role may only PutObject
+  `plays/*`. **Unlike the cache, this is the only copy: never delete it.**
 - SSM `/spotify-sync/*`: `client-id`, `client-secret`, `refresh-token`, `refresh-token-issued`, `link-key`, `user-id`,
   `last-reminded` (SecureString or String), and `state/*`. **These are the only copy of the secrets. Never delete or
   print them.**
@@ -118,6 +124,12 @@ tracks, then restores the player. Hard-won rules, each covered by tests in `test
    `/spotify-sync/state/api-usage`); a quota hit logs the total it was reached at. Use those numbers to tune the
    schedule. `/callback` now shows a "Spotify is busy" page on 429 (tests/test_auth.py). Owner to retry the
    approval link after the reset (Nov 25 ~1 PM PT).
+3b. **Nov 25 changes waiting for `cdk deploy`** (owner's machine): the history bucket + play log, the rolling last-100
+   job removed (playlist `5PDaSAK5sFZWzN6yPz5bXN` is no longer synced; the owner decides whether to delete it in
+   Spotify), and the forever job relabelled "Recently played". Expected `cdk diff`: + bucket `History` and its
+   policy, the role policy gains `s3:PutObject` on `plays/*`, both functions gain `HISTORY_BUCKET`, and a new code
+   asset. The stack edit was syntax-checked only (no node_modules in the cloud session): check the diff matches.
+   After deploying, the first run with a play should log `Play log: N new plays saved.`
 4. Verify the first real full Discover Weekly run on **Mon Nov 30, 2026, 4 AM PT** (logs: `aws logs tail /aws/lambda/spotify-sync`).
 5. Security housekeeping: rotate the Spotify client secret (it was pasted in a chat), and move the AWS MCP/CLI off
    the root user to a scoped IAM user.

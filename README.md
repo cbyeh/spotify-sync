@@ -53,7 +53,17 @@ To copy your entire Liked Songs history on the first run, set `backfill = true` 
 
 You can run both at once: add two `recent` jobs that point at different playlists.
 
-On AWS, changes show up within about a minute; on GitHub Actions, within an hour (it catches everything unless you finish more than 50 tracks in an hour).
+On AWS, changes show up within about 10 minutes; on GitHub Actions, within an hour (it catches everything unless you finish more than 50 tracks between runs).
+
+### Listening-history log (AWS only)
+
+The AWS stack also keeps every finished play as a small JSON file in a private, versioned S3 bucket
+(`spotify-sync-history-<account>-<region>`, key `plays/YYYY/MM/DD/<played_at>.json`): when you played it, the
+track, artists, album, length, and which playlist or album it was played from. It isn't a playlist, it's data
+for your own stats. It reuses the plays each run already fetches, so it costs no extra Spotify requests, and
+it's kept when the stack is destroyed. Like everything here it only sees your last 50 plays per run; if more
+than that pile up between runs (e.g. during a quota pause), the log warns about the possible gap. To fill in
+older history, request your *Extended streaming history* in Spotify's privacy settings.
 In practice, Spotify only records a song in this history once it plays through to the end. Songs you skip partway are left out,
 even after 30+ seconds, and offline plays are sometimes missed.
 

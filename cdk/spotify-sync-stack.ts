@@ -150,6 +150,24 @@ export class SpotifySyncStack extends Stack {
       conditions: { StringLike: { "s3:prefix": ["cache/*"] } },
     }));
 
+    // --- listening history: every finished play as plays/YYYY/MM/DD/<played_at>.json. Unlike the
+    //     cache, this is the only copy, so it's versioned (an overwrite or delete keeps the old
+    //     version) and retained on `cdk destroy`. The functions can only add plays, not read or
+    //     delete them.
+    const historyBucket = new s3.Bucket(this, "History", {
+      bucketName: `${name}-history-${Aws.ACCOUNT_ID}-${Aws.REGION}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_ENFORCED,
+      encryption: s3.BucketEncryption.S3_MANAGED, enforceSSL: true,
+      versioned: true,
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    historyBucket.policy!.applyRemovalPolicy(RemovalPolicy.RETAIN);
+    lambdaRole.addToPolicy(new iam.PolicyStatement({
+      actions: ["s3:PutObject"],
+      resources: [historyBucket.arnForObjects("plays/*")],
+    }));
+
     const makeFunction = (cid: string, fnName: string, handler: string, timeout: Duration) => {
       const logGroup = new logs.LogGroup(this, `${cid}Logs`, {
         logGroupName: `/aws/lambda/${fnName}`,
@@ -160,7 +178,7 @@ export class SpotifySyncStack extends Stack {
         runtime: lambda.Runtime.PYTHON_3_13, architecture: lambda.Architecture.ARM_64,
         handler, code, memorySize: 128, timeout, role: lambdaRole,
         environment: { PARAM_PREFIX: prefix, TOPIC_ARN: topic.topicArn,
-                       CACHE_BUCKET: cacheBucket.bucketName },
+                       CACHE_BUCKET: cacheBucket.bucketName, HISTORY_BUCKET: historyBucket.bucketName },
         logGroup,
       });
     };

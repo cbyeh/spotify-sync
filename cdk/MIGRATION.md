@@ -154,6 +154,7 @@ Expected: 5 schedules, all `DISABLED`, timezone `America/Los_Angeles`, target `.
 ```powershell
 cd cdk; cdk destroy -c smoke=true --force; cd ..
 aws s3 rb "s3://spotify-sync-smoke-cache-$Account-us-west-2"      # retained by design; it's empty
+aws s3 rb "s3://spotify-sync-smoke-history-$Account-us-west-2"    # likewise (the smoke copy never logs plays)
 foreach ($p in "client-id", "client-secret", "link-key") { aws ssm delete-parameter --name "$Smoke/$p" }
 aws ssm get-parameters-by-path --path $Smoke --recursive --query "Parameters[].Name" --output text   # expect nothing
 Remove-Item smoke-*.json

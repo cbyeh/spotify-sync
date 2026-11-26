@@ -132,6 +132,44 @@ def track_uri(entry: dict) -> str | None:
     return obj.get("uri")
 
 
+def play_record(item: dict) -> dict | None:
+    """One recently-played item as a compact, stable record for a listening-history log."""
+    obj = item.get("track") or item.get("item")
+    if not obj or obj.get("type") != "track" or not item.get("played_at"):
+        return None
+    album = obj.get("album") or {}
+    ctx = item.get("context") or {}
+    return {
+        "played_at": item["played_at"],
+        "uri": obj.get("uri"),
+        "name": obj.get("name"),
+        "artists": [{"name": a.get("name"), "uri": a.get("uri")} for a in obj.get("artists") or []],
+        "album": {"name": album.get("name"), "uri": album.get("uri"), "release_date": album.get("release_date")},
+        "duration_ms": obj.get("duration_ms"),
+        "explicit": obj.get("explicit"),
+        "context": {"type": ctx.get("type"), "uri": ctx.get("uri")} if ctx else None,
+    }
+
+
+def new_plays(items: list[dict], logged_until: str | None) -> tuple[list[dict], bool]:
+    """Plays newer than `logged_until` (Spotify's played_at, ISO UTC), oldest first, plus whether
+    some plays may have been missed: Spotify only returns the last 50, so if even the oldest of
+    them is newer than what was logged last, anything in between is gone."""
+    records = [r for r in map(play_record, items) if r]
+    records.sort(key=lambda r: r["played_at"])
+    if logged_until:
+        fresh = [r for r in records if r["played_at"] > logged_until]
+        gap = len(fresh) == len(records) and len(records) >= 50
+    else:
+        fresh, gap = records, False
+    return fresh, gap
+
+
+def play_key(played_at: str) -> str:
+    """S3 key for one play: plays/YYYY/MM/DD/<played_at>.json (UTC; colons swapped for dashes)."""
+    return f"plays/{played_at[0:4]}/{played_at[5:7]}/{played_at[8:10]}/{played_at.replace(':', '-')}.json"
+
+
 def endpoint_name(method: str, url: str) -> str:
     """'GET /playlists/{id}/items' for usage counts: no host, query string or IDs."""
     path = urllib.parse.urlsplit(url).path.removeprefix("/v1")

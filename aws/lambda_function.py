@@ -32,6 +32,8 @@ USAGE_WINDOW = dt.timedelta(hours=24)        # Spotify's quota appears to be a f
 LOCK_STALE_SECONDS = 360   # longer than the 5-minute function timeout
 TOPIC_ARN = os.environ.get("TOPIC_ARN", "")
 CACHE_BUCKET = os.environ.get("CACHE_BUCKET", "")   # private bucket for playlist contents (optional)
+HISTORY_BUCKET = os.environ.get("HISTORY_BUCKET", "")   # private bucket for the listening-history log (optional)
+PLAY_LOG = f"{PREFIX}/state/play-log"        # played_at of the newest play written to HISTORY_BUCKET
 ssm = boto3.client("ssm")
 
 _session: spotify_sync.Spotify | None = None   # reused across warm invocations until the token expires
@@ -173,6 +175,35 @@ def _record_usage(used: Counter, quota_hit: bool = False) -> None:
         print(f"::warning::Couldn't record Spotify usage: {e}")
 
 
+def _log_plays(sp, s3=None) -> int:
+    """Write each new finished play to HISTORY_BUCKET as plays/YYYY/MM/DD/<played_at>.json.
+    Uses the recent plays this run already fetched (no extra Spotify request) and never fails the run."""
+    items = getattr(sp, "_recent", None)
+    if items is None:   # this run didn't look at recent plays (e.g. a playback-only run)
+        return 0
+    try:
+        try:
+            logged_until = ssm.get_parameter(Name=PLAY_LOG)["Parameter"]["Value"]
+        except ssm.exceptions.ParameterNotFound:
+            logged_until = None
+        fresh, gap = spotify_sync.new_plays(items, logged_until)
+        if gap:
+            print(f"::warning::Play log: plays between {logged_until} and {fresh[0]['played_at']} may be "
+                  "missing (Spotify only returns the last 50).")
+        if not fresh:
+            return 0
+        s3 = s3 or boto3.client("s3")
+        for r in fresh:   # oldest first, so the marker only advances past plays that were written
+            s3.put_object(Bucket=HISTORY_BUCKET, Key=spotify_sync.play_key(r["played_at"]),
+                          Body=json.dumps(r, ensure_ascii=False).encode(), ContentType="application/json")
+        ssm.put_parameter(Name=PLAY_LOG, Value=fresh[-1]["played_at"], Type="String", Overwrite=True)
+        print(f"Play log: {len(fresh)} new play{'s' if len(fresh) != 1 else ''} saved.")
+        return len(fresh)
+    except Exception as e:   # the history log must never break the sync
+        print(f"::warning::Couldn't write the play log: {e}")
+        return 0
+
+
 def _config_path() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
     # a flat zip has config.toml next to this file; the CDK asset keeps the repo layout (one level up)
@@ -236,6 +267,8 @@ def handler(event, context):
             if CACHE_BUCKET:
                 _session.store = S3PlaylistCache(CACHE_BUCKET)
             errors = run()
+        if HISTORY_BUCKET and not dry_run:
+            _log_plays(_session)
     finally:
         _release_lock()
         _record_usage(used, quota_hit)

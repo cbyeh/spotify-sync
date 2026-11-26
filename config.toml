@@ -26,18 +26,12 @@ from = "liked"
 to   = "1k6vxCv3Z389o9QK2qaxD7"   # Liked songs backUP
 backfill = false
 
+# Every song you finish, kept forever, ordered by when you last played it (replays move to the end).
+# (The old rolling last-100 playlist, 5PDaSAK5sFZWzN6yPz5bXN, is no longer synced: Spotify's Recents covers it.)
 [[sync]]
 name = "Recently played"
 from = "recent"
-to   = "5PDaSAK5sFZWzN6yPz5bXN"   # Recently Played
-mode = "rolling"
-keep = 100
-
-# Every song you finish, kept forever, ordered by when you last played it (replays move to the end).
-[[sync]]
-name = "Recently played forever"
-from = "recent"
-to   = "6JqJYMSccCzSFTB0XMFGXZ"   # Recently played forever
+to   = "6JqJYMSccCzSFTB0XMFGXZ"   # Recently Played
 mode = "last_played"
 
 # Every Discover Weekly song you listen to (to the end) goes into All Weeklies.
