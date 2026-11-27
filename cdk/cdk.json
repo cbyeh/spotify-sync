@@ -5,7 +5,7 @@
     "region": "us-west-2",
     "alertEmail": "",
     "paramPrefix": "/spotify-sync",
-    "syncSchedule": "rate(10 minutes)",
+    "syncSchedule": "rate(5 minutes)",
     "timezone": "America/Los_Angeles"
   }
 }
