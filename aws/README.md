@@ -2,11 +2,13 @@
 
 The whole AWS setup is one CDK stack (`cdk/`). It contains:
 
-- **`spotify-sync`**: a Lambda that syncs **every 10 minutes**, triggered by EventBridge Scheduler. Each run first asks Spotify "anything new?"
+- **`spotify-sync`**: a Lambda that syncs **every 5 minutes**, triggered by EventBridge Scheduler. Each run first asks Spotify "anything new?"
   (1–2 small calls, about a second) and only reads or writes playlists when something changed. A daily full check re-verifies everything.
   Why not every minute: Spotify's Development Mode has an unpublished daily request quota (it ran out after
-  roughly 400–1,000 requests in a day), and every minute is ~2,900 requests a day. Every 10 minutes is ~290. Each run
-  logs its request count and the 24-hour total, so you can see how close you are. Change it with `-c syncSchedule=...`.
+  roughly 400–1,000 requests in a day), and every minute is ~2,900 requests a day. Every 5 minutes is 288 runs; jobs
+  that can lag (like a Liked Songs backup) use `check_every = 30` in config.toml, so a quiet day costs ~340 requests
+  instead of ~580. Each run logs its request count and the 24-hour total, so you can see how close you are. Change the
+  schedule with `-c syncSchedule=...`.
 - **`spotify-sync-auth`**: a Lambda with a public URL that handles Spotify approval, plus a daily check that emails you a one-tap renewal link before Spotify's 6-month token expiry.
 - An SNS email topic, a failure alarm, two IAM roles with minimal permissions, and logs kept for 14 days.
 

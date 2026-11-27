@@ -87,7 +87,7 @@ export class SpotifySyncStack extends Stack {
       cacheOnly = false,
       paramPrefix = "/spotify-sync",
       alertEmail,
-      syncSchedule = "rate(10 minutes)",
+      syncSchedule = "rate(5 minutes)",
       fullCheckSchedule = "cron(30 3 * * ? *)",
       reminderSchedule = "cron(0 9 * * ? *)",
       playbackSchedule = "cron(0 4 ? * MON *)",

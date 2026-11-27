@@ -18,6 +18,8 @@
 #                      muted, on an idle Spotify desktop app; weekly; restores your player afterwards
 #   device = "<name>"  (playback) use this Spotify device instead of any computer
 #   take = 30          (playback) how many tracks the playlist has (Discover Weekly: 30, the default)
+#   check_every = 30   look at this job's source at most every 30 minutes (saves Spotify's daily quota;
+#                      the daily full check still runs). Default: every scheduled run.
 #   enabled  = false   skip this job
 
 [[sync]]
@@ -25,6 +27,7 @@ name = "Liked Songs backup"
 from = "liked"
 to   = "1k6vxCv3Z389o9QK2qaxD7"   # Liked songs backUP
 backfill = false
+check_every = 30     # a backup can lag a little; recent plays stay on the 5-minute schedule
 
 # Every song you finish, kept forever, ordered by when you last played it (replays move to the end).
 # (The old rolling last-100 playlist, 5PDaSAK5sFZWzN6yPz5bXN, is no longer synced: Spotify's Recents covers it.)

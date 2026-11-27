@@ -18,7 +18,7 @@ work on it safely.
   **This is the live deployment** (stack `SpotifySync`, since Nov 24 2026). Change things with `cdk deploy` only.
 - `aws/spend_cap_function.py`: account-wide spend-cap kill switch (see "Spend cap" below). Not part of the CDK stack.
 - `tests/`: dependency-free tests using fakes. Run `python tests/test_sync_logic.py`, `python tests/test_playback.py`,
-  `python tests/test_cache.py`, `python tests/test_auth.py`, `python tests/test_usage.py`, `python tests/test_playlog.py`
+  `python tests/test_cache.py`, `python tests/test_auth.py`, `python tests/test_usage.py`, `python tests/test_playlog.py`, `python tests/test_check_every.py`
   and `python tests/test_spend_cap.py`.
 - `.github/workflows/sync.yml`: alternative hourly runner on GitHub Actions. It skips when secrets aren't set,
   which they aren't for the owner.
@@ -35,7 +35,7 @@ the schedules back on after risky changes. The CDK account is bootstrapped (`CDK
   (120 s; same env). Both use role `spotify-sync-lambda`. Handlers `aws.lambda_function.handler` / `aws.auth_function.handler`.
   `spotify-sync-auth` reads its public URL from the stack-owned `/spotify-sync/auth-url` (no `AUTH_BASE_URL` any more).
 - Schedules (EventBridge Scheduler, role `spotify-sync-scheduler`, timezone America/Los_Angeles):
-  `spotify-sync` rate(10 minutes) · `spotify-sync-full` 3:30 AM daily `{"full":true}` · `spotify-sync-reminder` 9 AM daily
+  `spotify-sync` rate(5 minutes) (Liked Songs job: `check_every = 30`) · `spotify-sync-full` 3:30 AM daily `{"full":true}` · `spotify-sync-reminder` 9 AM daily
   → auth `{"action":"remind"}` · `spotify-sync-playback` Mon 4 AM `{"playback":true}` ·
   `spotify-sync-playback-final` Mon 5 AM `{"playback":true,"final":true}`.
 - SNS topic `spotify-sync-alerts` (recreated by the stack: the owner must re-confirm the email subscription),
@@ -124,6 +124,11 @@ tracks, then restores the player. Hard-won rules, each covered by tests in `test
    `/spotify-sync/state/api-usage`); a quota hit logs the total it was reached at. Use those numbers to tune the
    schedule. `/callback` now shows a "Spotify is busy" page on 429 (tests/test_auth.py). Owner to retry the
    approval link after the reset (Nov 25 ~1 PM PT).
+3c. **Nov 27: every 5 minutes** (owner's request). `check_every = N` (minutes; `spotify_sync.check_every_seconds`,
+   tests/test_check_every.py) skips a job with zero requests until N minutes since its last successful check
+   (state `<key>-checked`, epoch seconds; 2 min slack; `full` ignores it; failures retry next run). Liked Songs
+   uses 30, recent plays run every time. Estimate ~420–450 requests/day incl. plays (was ~330 at 10 min with both
+   recent playlists). Watch `Spotify requests: ...` in the logs; back to rate(10 minutes) if it nears ~700.
 3b. **Nov 25 changes waiting for `cdk deploy`** (owner's machine): the history bucket + play log, the rolling last-100
    job removed (playlist `5PDaSAK5sFZWzN6yPz5bXN` is no longer synced; the owner decides whether to delete it in
    Spotify), and the forever job relabelled "Recently played". Expected `cdk diff`: + bucket `History` and its

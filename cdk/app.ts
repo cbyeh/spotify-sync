@@ -31,7 +31,7 @@ new SpotifySyncStack(app, smoke ? "SpotifySyncSmoke" : "SpotifySync", {
   cacheOnly: importCache,
   alertEmail: smoke ? undefined : ctx("alertEmail"),
   paramPrefix: smoke ? "/spotify-sync-smoke" : (ctx("paramPrefix") ?? "/spotify-sync"),
-  syncSchedule: ctx("syncSchedule") ?? "rate(10 minutes)",
+  syncSchedule: ctx("syncSchedule") ?? "rate(5 minutes)",
   timezone: ctx("timezone") ?? "America/Los_Angeles",
   // The region is pinned in cdk.json ("region"), not taken from CDK_DEFAULT_REGION: the CDK CLI
   // always sets that from the SDK's region, which falls back to us-east-1 when none is configured,

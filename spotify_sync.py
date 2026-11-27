@@ -767,18 +767,44 @@ def run_playback_job(sp: Spotify, job: dict, dry_run: bool, state=None,
     return len(new)
 
 
+def check_every_seconds(job: dict) -> float:
+    """`check_every = N` (minutes): look at this job's source at most every N minutes, so a slower
+    job (e.g. a Liked Songs backup) doesn't spend Spotify's daily quota on every scheduled run."""
+    if "check_every" not in job:
+        return 0.0
+    minutes = job["check_every"]
+    if isinstance(minutes, bool) or not isinstance(minutes, (int, float)) or minutes <= 0:
+        raise ValueError("`check_every` must be a positive number of minutes")
+    return float(minutes) * 60
+
+
 def run_job(sp: Spotify, job: dict, dry_run: bool, state=None, full: bool = False) -> int:
     """Run one job. With a `state` store (get/set), skip quickly when the source hasn't changed
-    since the last successful run, unless `full` is set."""
+    since the last successful run, unless `full` is set. A job with `check_every` is skipped
+    without any request until that many minutes have passed since its last successful check."""
+    every = check_every_seconds(job)
     if state is None:
         return sync_job(sp, job, dry_run)
     key = state_key(job)
+    checked_key = key + "-checked"
+    now = time.time()
+    if every and not full:
+        try:
+            last = float(state.get(checked_key) or 0)
+        except ValueError:
+            last = 0.0
+        # 2 minutes of slack so a 30-minute check on a 5-minute schedule doesn't slip to 35
+        if now - last < every - 120:
+            return 0
     marker = change_marker(sp, job)
     if not full and marker and state.get(key) == marker:
-        return 0
-    added = sync_job(sp, job, dry_run)
-    if marker and not dry_run:
-        state.set(key, marker)
+        added = 0
+    else:
+        added = sync_job(sp, job, dry_run)
+        if marker and not dry_run:
+            state.set(key, marker)
+    if every and not dry_run:   # only after success: a failed check is retried on the next run
+        state.set(checked_key, str(int(now)))
     return added
 
 
